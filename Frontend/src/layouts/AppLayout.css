@@ -1,0 +1,11 @@
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.app-content {
+  flex: 1;
+  min-width: 0;
+  padding: 28px 36px 40px;
+}

@@ -134,6 +134,7 @@ async function runFullTestSuite() {
   console.log('\n▶ [4] FILE MANAGEMENT, EDITING & AUDIT TRAIL');
 
   const testFileId = `AHC-TEST-${Date.now()}`;
+  const testCaseId = `CASE-TEST-${Date.now()}`;
   const testEpc = `E28068TEST${Math.floor(Math.random() * 100000000)}`;
 
   const createFileRes = await request('/files', {
@@ -142,7 +143,7 @@ async function runFullTestSuite() {
     body: JSON.stringify({
       fileId: testFileId,
       fileName: 'State vs. Test Subject - Volume 1',
-      caseId: 'CASE-TEST-99',
+      caseId: testCaseId,
       caseName: 'State vs. Test Subject',
       rfidTag: testEpc,
       currentLocation: 'SHELF_ROOM',
@@ -289,7 +290,7 @@ async function runFullTestSuite() {
   assert(unkReport.status === 200 && unkReport.data.items.some((u) => u.rfidTag === unkTagEpc), 'Unknown Tag Report correctly lists unmatched scan');
 
   // Case summary report
-  const caseReport = await request('/reports/case/CASE-TEST-99', {
+  const caseReport = await request(`/reports/case/${testCaseId}`, {
     headers: { Authorization: `Bearer ${staffToken}` },
   });
   assert(caseReport.status === 200 && caseReport.data.totalFiles === 1, 'Case Summary Report aggregates case file bundle locations');

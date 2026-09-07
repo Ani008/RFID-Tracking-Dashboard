@@ -33,6 +33,18 @@ export function emitMovement(payload) {
   io.emit('movement:new', payload);
 }
 
+/**
+ * Emits `scanner:tag` whenever the desktop enrollment scanner reads a UID.
+ * The Register File page listens for this to auto-fill the RFID Tag field.
+ */
+export function emitTagScanned(payload) {
+  if (!io) {
+    console.warn('[socket] emitTagScanned called before initSocket()');
+    return;
+  }
+  io.emit('scanner:tag', payload);
+}
+
 export function getIO() {
   return io;
 }

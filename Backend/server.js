@@ -2,9 +2,10 @@ import 'dotenv/config';
 import http from 'http';
 import mongoose from 'mongoose';
 
-import { createApp } from './app.js';
-import { initSocket, emitMovement } from './sockets/index.js';
+import { createApp, finalizeApp } from './app.js';
+import { initSocket, emitMovement, emitTagScanned } from './sockets/index.js';
 import { initReaderAgent } from './reader-agent/index.js';
+import { initDesktopScanner } from './reader-agent/desktop-scanner-adapter.js';
 import { processMovementBatch } from './services/movementService.js';
 
 const PORT = process.env.PORT || 4000;
@@ -30,6 +31,15 @@ async function start() {
   };
 
   initReaderAgent(app, onTagBatch);
+
+  // Desktop enrollment scanner (Register File flow) — separate concern from
+  // the gate/antenna reader agent above. Toggle with DESKTOPSCANNER=local|production.
+  const onTagScanned = (payload) => emitTagScanned(payload);
+  initDesktopScanner(onTagScanned);
+
+  // notFoundHandler/errorHandler must be registered last, after every route
+  // (including /api/simulate from the reader agent) is mounted.
+  finalizeApp(app);
 
   httpServer.listen(PORT, () => {
     console.log(`[server] listening on http://localhost:${PORT}`);

@@ -41,8 +41,12 @@ export function createApp() {
   app.use('/api/gates', gateRoutes);
   app.use('/api/reports', reportRoutes);
 
+  return app;
+}
+
+// Call this ONLY after every other route (including the reader-agent's
+// /api/simulate) has been mounted on the app — these must be last.
+export function finalizeApp(app) {
   app.use(notFoundHandler);
   app.use(errorHandler);
-
-  return app;
 }

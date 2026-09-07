@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import { createFile } from '../api/files.js';
+import { useScannerSocket } from '../hooks/useScannerSocket.js';
 import '../styles/forms.css';
 
 const EMPTY_FORM = { fileId: '', fileName: '', caseId: '', caseName: '', rfidTag: '' };
@@ -9,6 +10,15 @@ export default function RegisterFile() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [status, setStatus] = useState(null); // { type: 'success' | 'error', message }
   const [submitting, setSubmitting] = useState(false);
+  const { isConnected: socketConnected, lastTag } = useScannerSocket();
+
+  // Auto-fill the RFID Tag field whenever the desktop scanner reports a UID.
+  // Only overwrites if the field is empty, so it never clobbers something
+  // you've already typed/pasted by hand.
+  useEffect(() => {
+    if (!lastTag) return;
+    setForm((f) => (f.rfidTag ? f : { ...f, rfidTag: lastTag.uid }));
+  }, [lastTag]);
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -35,6 +45,17 @@ export default function RegisterFile() {
         title="Register File"
         subtitle="Add a new physical file and pair it with an RFID tag"
       />
+
+      <div style={{ marginBottom: '1rem' }}>
+        <span className={`status-badge tone-${socketConnected ? 'green' : 'neutral'}`}>
+          {socketConnected ? 'Scanner link connected' : 'Scanner link offline'}
+        </span>
+        {lastTag && (
+          <span className="status-badge tone-blue" style={{ marginLeft: '0.5rem' }}>
+            Last scan: {lastTag.uid}
+          </span>
+        )}
+      </div>
 
       {status && (
         <div className={`banner ${status.type === 'success' ? 'banner-success' : 'banner-error'}`}>
@@ -95,8 +116,8 @@ export default function RegisterFile() {
               required
             />
             <span className="field-hint">
-              No hardware yet — type or paste the tag's EPC manually. Once real readers are
-              connected, this becomes a "scan to register" flow instead.
+              Scan a tag on the desktop reader to auto-fill this field, or type/paste the EPC
+              manually — both work.
             </span>
           </div>
         </div>

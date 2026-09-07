@@ -1,0 +1,151 @@
+.edit-modal-panel {
+  width: 100%;
+  max-width: 560px;
+  background: var(--surface);
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  box-shadow: 0 25px 60px rgba(10, 18, 32, 0.25);
+  overflow: hidden;
+  animation: modalPop 0.2s ease-out;
+}
+
+.edit-modal-header {
+  padding: 1.4rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.edit-modal-header h3 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.edit-modal-subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.edit-modal-body {
+  padding: 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-height: 72vh;
+  overflow-y: auto;
+}
+
+/* Vertical Stack Field */
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 0.45rem;
+}
+
+.edit-field-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.edit-field-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem 1rem;
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  display: block;
+}
+
+.edit-field-input:focus {
+  outline: none;
+  border-color: var(--accent-500, #3358d6);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px rgba(51, 88, 214, 0.12);
+}
+
+.edit-field-input.mono {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.edit-readonly-box {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem 1rem;
+  background: #f1f5f9;
+  border: 1.5px solid var(--border-soft, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.95rem;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.edit-readonly-box.mono {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+}
+
+.edit-tag-warning {
+  padding: 1rem 1.15rem;
+  background: #fffbeb;
+  border: 1.5px solid #fde68a;
+  border-radius: var(--radius-sm, 8px);
+  color: #92400e;
+  font-size: 0.88rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+}
+
+.tag-warning-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  color: #b45309;
+}
+
+.edit-confirm-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #78350f;
+  margin-top: 0.25rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.edit-confirm-checkbox input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: #b45309;
+  cursor: pointer;
+}
+
+.edit-modal-footer {
+  padding: 1.25rem 1.75rem;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}

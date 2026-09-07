@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search } from 'lucide-react';
+import { Search, Edit3 } from 'lucide-react';
 import PageHeader from '../components/PageHeader.jsx';
 import { LocationBadge } from '../components/StatusBadge.jsx';
 import FileDetailModal from '../components/FileDetailModal.jsx';
+import EditFileModal from '../components/EditFileModal.jsx';
 import { fetchFiles } from '../api/files.js';
 import { useConnection } from '../context/ConnectionContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 import './CaseFiles.css';
 
 const LOCATIONS = [
@@ -18,6 +20,7 @@ const LOCATIONS = [
 export default function CaseFiles() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { lastMovement } = useConnection();
+  const { isAdmin } = useAuth();
 
   const [search, setSearch] = useState(searchParams.get('search') || '');
   const [location, setLocation] = useState(searchParams.get('location') || '');
@@ -25,6 +28,7 @@ export default function CaseFiles() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedFileId, setSelectedFileId] = useState(null);
+  const [editingFile, setEditingFile] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,21 +106,37 @@ export default function CaseFiles() {
                 <th>Case</th>
                 <th>Location</th>
                 <th>Last Movement</th>
+                {isAdmin && <th style={{ textAlign: 'right' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
               {files.map((f) => (
-                <tr key={f.fileId} onClick={() => setSelectedFileId(f.fileId)} className="clickable-row">
-                  <td className="mono">{f.fileId}</td>
-                  <td>{f.fileName}</td>
-                  <td>
+                <tr key={f.fileId} className="clickable-row">
+                  <td className="mono" onClick={() => setSelectedFileId(f.fileId)}>{f.fileId}</td>
+                  <td onClick={() => setSelectedFileId(f.fileId)}>{f.fileName}</td>
+                  <td onClick={() => setSelectedFileId(f.fileId)}>
                     <div>{f.caseId}</div>
                     <div className="files-case-name">{f.caseName}</div>
                   </td>
-                  <td>
+                  <td onClick={() => setSelectedFileId(f.fileId)}>
                     <LocationBadge location={f.currentLocation} />
                   </td>
-                  <td>{f.lastMovementAt ? new Date(f.lastMovementAt).toLocaleString() : '—'}</td>
+                  <td onClick={() => setSelectedFileId(f.fileId)}>{f.lastMovementAt ? new Date(f.lastMovementAt).toLocaleString() : '—'}</td>
+                  {isAdmin && (
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        className="btn-action"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingFile(f);
+                        }}
+                        title="Edit File Record"
+                      >
+                        <Edit3 size={13} />
+                        <span>Edit</span>
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -124,7 +144,21 @@ export default function CaseFiles() {
         )}
       </div>
 
-      {selectedFileId && <FileDetailModal fileId={selectedFileId} onClose={() => setSelectedFileId(null)} />}
+      {selectedFileId && (
+        <FileDetailModal
+          fileId={selectedFileId}
+          onClose={() => setSelectedFileId(null)}
+          onFileUpdated={load}
+        />
+      )}
+
+      {editingFile && (
+        <EditFileModal
+          file={editingFile}
+          onClose={() => setEditingFile(null)}
+          onSaveSuccess={load}
+        />
+      )}
     </div>
   );
 }

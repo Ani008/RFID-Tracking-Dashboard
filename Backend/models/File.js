@@ -20,7 +20,6 @@ const fileSchema = new Schema(
   { timestamps: true }
 );
 
-fileSchema.index({ rfidTag: 1 }, { unique: true });
 fileSchema.index({ currentLocation: 1 });
 fileSchema.index({ caseId: 1 });
 

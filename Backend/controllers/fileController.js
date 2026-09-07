@@ -1,5 +1,6 @@
 import File from '../models/File.js';
 import MovementLog from '../models/MovementLog.js';
+import AuditLog from '../models/AuditLog.js';
 
 const VALID_LOCATIONS = ['SHELF_ROOM', 'COURT_ROOM', 'IN_TRANSIT'];
 
@@ -19,10 +20,6 @@ function validateFilePayload(body, { partial = false } = {}) {
         errors.push(`${field} cannot be empty`);
       }
     }
-  }
-
-  if (body.currentLocation && !VALID_LOCATIONS.includes(body.currentLocation)) {
-    errors.push(`currentLocation must be one of ${VALID_LOCATIONS.join(', ')}`);
   }
 
   return errors;
@@ -66,18 +63,35 @@ export async function createFile(req, res, next) {
       return res.status(409).json({
         error:
           existing.fileId === fileId
-            ? `fileId "${fileId}" already exists`
-            : `rfidTag "${rfidTag}" is already paired with another file`,
+            ? `File ID "${fileId}" already exists`
+            : `RFID tag "${rfidTag}" is already paired with file ${existing.fileId}`,
       });
     }
 
     const file = await File.create({
-      fileId,
-      fileName,
-      caseId,
-      caseName,
-      rfidTag,
+      fileId: fileId.trim(),
+      fileName: fileName.trim(),
+      caseId: caseId.trim(),
+      caseName: caseName.trim(),
+      rfidTag: rfidTag.trim(),
       currentLocation: currentLocation || 'SHELF_ROOM',
+    });
+
+    // Audit log
+    await AuditLog.create({
+      userId: req.user?._id,
+      username: req.user?.username || 'system',
+      action: 'FILE_CREATE',
+      targetType: 'File',
+      targetId: file.fileId,
+      after: {
+        fileId: file.fileId,
+        fileName: file.fileName,
+        caseId: file.caseId,
+        caseName: file.caseName,
+        rfidTag: file.rfidTag,
+        currentLocation: file.currentLocation,
+      },
     });
 
     res.status(201).json(file);
@@ -86,21 +100,24 @@ export async function createFile(req, res, next) {
   }
 }
 
-// GET /api/files/:fileId  -> file detail + movement history
+// GET /api/files/:fileId  -> file detail + movement history + audit trail
 export async function getFile(req, res, next) {
   try {
     const file = await File.findOne({ fileId: req.params.fileId });
     if (!file) return res.status(404).json({ error: `File "${req.params.fileId}" not found` });
 
-    const history = await MovementLog.find({ fileId: file.fileId }).sort({ timestamp: -1 });
+    const [history, auditTrail] = await Promise.all([
+      MovementLog.find({ fileId: file.fileId }).sort({ timestamp: -1 }),
+      AuditLog.find({ targetId: file.fileId }).sort({ timestamp: -1 }),
+    ]);
 
-    res.json({ file, history });
+    res.json({ file, history, auditTrail });
   } catch (err) {
     next(err);
   }
 }
 
-// PUT /api/files/:fileId
+// PUT /api/files/:fileId -> Hardened metadata edit (admin-only)
 export async function updateFile(req, res, next) {
   try {
     const errors = validateFilePayload(req.body, { partial: true });
@@ -109,20 +126,71 @@ export async function updateFile(req, res, next) {
     const file = await File.findOne({ fileId: req.params.fileId });
     if (!file) return res.status(404).json({ error: `File "${req.params.fileId}" not found` });
 
-    // Guard against rfidTag collisions with a different file.
-    if (req.body.rfidTag && req.body.rfidTag !== file.rfidTag) {
-      const conflict = await File.findOne({ rfidTag: req.body.rfidTag, fileId: { $ne: file.fileId } });
+    if (file.archived) {
+      return res.status(400).json({ error: `Cannot edit archived file "${file.fileId}". Unarchive first.` });
+    }
+
+    // Explicitly reject direct location manipulation through metadata edit
+    if (req.body.currentLocation && req.body.currentLocation !== file.currentLocation) {
+      return res.status(400).json({
+        error:
+          'currentLocation cannot be edited directly. Location updates must happen via RFID scan events or reader simulation.',
+      });
+    }
+
+    const trimmedNewTag = req.body.rfidTag ? req.body.rfidTag.trim() : undefined;
+
+    // Check duplicate rfidTag across other files
+    if (trimmedNewTag && trimmedNewTag !== file.rfidTag) {
+      const conflict = await File.findOne({
+        rfidTag: trimmedNewTag,
+        _id: { $ne: file._id },
+      });
       if (conflict) {
-        return res.status(409).json({ error: `rfidTag "${req.body.rfidTag}" is already paired with another file` });
+        return res.status(409).json({
+          error: `RFID tag "${trimmedNewTag}" is already paired with file ${conflict.fileId}`,
+        });
       }
     }
 
-    const editable = ['fileName', 'caseId', 'caseName', 'rfidTag', 'currentLocation'];
-    for (const field of editable) {
-      if (field in req.body) file[field] = req.body[field];
+    // Capture before snapshot of fields changing
+    const before = {};
+    const after = {};
+    const editableFields = ['fileName', 'caseId', 'caseName', 'rfidTag'];
+    let hasTagChange = false;
+
+    for (const field of editableFields) {
+      if (field in req.body) {
+        const newVal = typeof req.body[field] === 'string' ? req.body[field].trim() : req.body[field];
+        if (newVal !== file[field]) {
+          before[field] = file[field];
+          after[field] = newVal;
+          file[field] = newVal;
+
+          if (field === 'rfidTag') {
+            hasTagChange = true;
+          }
+        }
+      }
     }
 
-    await file.save();
+    // Only proceed with save and audit log if changes were made
+    if (Object.keys(after).length > 0) {
+      await file.save();
+
+      const action = hasTagChange ? 'TAG_REASSIGN' : 'FILE_UPDATE';
+      await AuditLog.create({
+        userId: req.user?._id,
+        username: req.user?.username || 'system',
+        action,
+        targetType: 'File',
+        targetId: file.fileId,
+        before,
+        after,
+        reason: req.body.reason ? String(req.body.reason).trim() : '',
+      });
+    }
+
     res.json(file);
   } catch (err) {
     next(err);
@@ -137,6 +205,16 @@ export async function deleteFile(req, res, next) {
 
     file.archived = true;
     await file.save();
+
+    await AuditLog.create({
+      userId: req.user?._id,
+      username: req.user?.username || 'system',
+      action: 'FILE_ARCHIVE',
+      targetType: 'File',
+      targetId: file.fileId,
+      before: { archived: false },
+      after: { archived: true },
+    });
 
     res.json({ message: `File "${file.fileId}" archived`, file });
   } catch (err) {

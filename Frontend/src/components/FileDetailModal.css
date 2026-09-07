@@ -13,7 +13,7 @@
   background: var(--surface);
   border-radius: var(--radius-lg);
   width: 100%;
-  max-width: 620px;
+  max-width: 660px;
   max-height: 88vh;
   overflow-y: auto;
   padding: 28px 28px 24px;
@@ -65,11 +65,14 @@
 
 .modal-meta {
   display: flex;
-  gap: 32px;
+  gap: 24px;
   padding: 14px 0;
   border-top: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border-soft);
   margin-bottom: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .modal-meta > div {
@@ -85,6 +88,33 @@
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-faint);
+}
+
+.modal-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 16px;
+}
+
+.modal-tab-btn {
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: -1px;
+}
+
+.modal-tab-btn.active {
+  color: var(--accent-600);
+  border-bottom-color: var(--accent-600);
 }
 
 .modal-history-title {
@@ -142,6 +172,10 @@
   flex-shrink: 0;
 }
 
+.timeline-dot.audit {
+  background: var(--purple-600);
+}
+
 .timeline-content {
   flex: 1;
 }
@@ -168,4 +202,26 @@
 .timeline-sub {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.audit-change-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--purple-bg);
+  color: var(--purple-600);
+}
+
+.audit-diff-box {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }

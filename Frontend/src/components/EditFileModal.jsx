@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, AlertTriangle, Save } from 'lucide-react';
 import { updateFile } from '../api/files.js';
 import { LocationBadge } from './StatusBadge.jsx';
+import { normalizeRfidTag } from '../utils/rfid.js';
 import './EditFileModal.css';
 
 export default function EditFileModal({ file, onClose, onSaveSuccess }) {
@@ -33,7 +34,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
 
   if (!file) return null;
 
-  const isTagChanged = formData.rfidTag.trim() !== originalTag;
+  const isTagChanged = normalizeRfidTag(formData.rfidTag) !== originalTag;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -48,6 +49,11 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
       return;
     }
 
+    if (isTagChanged && !formData.reason.trim()) {
+      setError('Reason for Edit is mandatory when changing the paired RFID Tag');
+      return;
+    }
+
     try {
       setSaving(true);
       setError(null);
@@ -55,7 +61,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
         fileName: formData.fileName.trim(),
         caseId: formData.caseId.trim(),
         caseName: formData.caseName.trim(),
-        rfidTag: formData.rfidTag.trim(),
+        rfidTag: normalizeRfidTag(formData.rfidTag),
         reason: formData.reason.trim(),
       });
       if (onSaveSuccess) onSaveSuccess(updated);

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
 import { createFile } from '../api/files.js';
 import { useScannerSocket } from '../hooks/useScannerSocket.js';
+import { normalizeRfidTag } from '../utils/rfid.js';
 import '../styles/forms.css';
 
 const EMPTY_FORM = { fileId: '', fileName: '', caseId: '', caseName: '', rfidTag: '' };
@@ -17,11 +18,13 @@ export default function RegisterFile() {
   // you've already typed/pasted by hand.
   useEffect(() => {
     if (!lastTag) return;
-    setForm((f) => (f.rfidTag ? f : { ...f, rfidTag: lastTag.uid }));
+    const cleanTag = normalizeRfidTag(lastTag.uid);
+    setForm((f) => (f.rfidTag ? f : { ...f, rfidTag: cleanTag }));
   }, [lastTag]);
 
   function update(field, value) {
-    setForm((f) => ({ ...f, [field]: value }));
+    const cleanValue = field === 'rfidTag' ? normalizeRfidTag(value) : value;
+    setForm((f) => ({ ...f, [field]: cleanValue }));
   }
 
   async function handleSubmit(e) {
@@ -29,7 +32,11 @@ export default function RegisterFile() {
     setSubmitting(true);
     setStatus(null);
     try {
-      const file = await createFile(form);
+      const normalizedPayload = {
+        ...form,
+        rfidTag: normalizeRfidTag(form.rfidTag),
+      };
+      const file = await createFile(normalizedPayload);
       setStatus({ type: 'success', message: `Registered ${file.fileId} — paired with tag ${file.rfidTag}.` });
       setForm(EMPTY_FORM);
     } catch (err) {

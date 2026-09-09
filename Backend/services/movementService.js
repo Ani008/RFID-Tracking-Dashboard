@@ -1,6 +1,7 @@
 import File from '../models/File.js';
 import MovementLog from '../models/MovementLog.js';
 import UnknownTag from '../models/UnknownTag.js';
+import { normalizeRfidTag } from '../utils/rfidHelper.js';
 
 /**
  * Maps (gateId, direction) -> resulting File.currentLocation
@@ -44,8 +45,8 @@ export async function processMovementBatch(batch) {
   const matched = [];
   const unknown = [];
 
-  // De-dupe EPCs within a single batch, preserving order.
-  const uniqueEpcs = [...new Set(epcs)];
+  // De-dupe EPCs within a single batch, preserving order and normalizing.
+  const uniqueEpcs = [...new Set(epcs.map((t) => normalizeRfidTag(t)).filter(Boolean))];
 
   for (const rfidTag of uniqueEpcs) {
     try {

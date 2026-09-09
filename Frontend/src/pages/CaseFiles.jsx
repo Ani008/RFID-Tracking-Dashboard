@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Edit3 } from 'lucide-react';
+import { Search, Edit3, Trash2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import PageHeader from '../components/PageHeader.jsx';
 import { LocationBadge } from '../components/StatusBadge.jsx';
 import FileDetailModal from '../components/FileDetailModal.jsx';
 import EditFileModal from '../components/EditFileModal.jsx';
-import { fetchFiles } from '../api/files.js';
+import { fetchFiles, deleteFile } from '../api/files.js';
 import { useConnection } from '../context/ConnectionContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import './CaseFiles.css';
@@ -29,6 +29,9 @@ export default function CaseFiles() {
   const [error, setError] = useState(null);
   const [selectedFileId, setSelectedFileId] = useState(null);
   const [editingFile, setEditingFile] = useState(null);
+  const [fileToDelete, setFileToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [notification, setNotification] = useState(null); // { type: 'success' | 'error', message: string }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,9 +67,36 @@ export default function CaseFiles() {
     load();
   }
 
+  async function handleConfirmDelete() {
+    if (!fileToDelete) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteFile(fileToDelete.fileId);
+      setNotification({
+        type: 'success',
+        message: `File ${fileToDelete.fileId} and all associated movement history have been wiped.`,
+      });
+      setFileToDelete(null);
+      await load();
+      setTimeout(() => setNotification(null), 4000);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div>
       <PageHeader title="Case Files" subtitle="Every registered file and its current physical location" />
+
+      {notification && (
+        <div className={`casefiles-notification ${notification.type}`}>
+          <CheckCircle2 size={16} />
+          <span>{notification.message}</span>
+        </div>
+      )}
 
       <form className="files-toolbar" onSubmit={handleSubmit}>
         <div className="files-search-input">
@@ -124,17 +154,24 @@ export default function CaseFiles() {
                   <td onClick={() => setSelectedFileId(f.fileId)}>{f.lastMovementAt ? new Date(f.lastMovementAt).toLocaleString() : '—'}</td>
                   {isAdmin && (
                     <td style={{ textAlign: 'right' }}>
-                      <button
-                        className="btn-action"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingFile(f);
-                        }}
-                        title="Edit File Record"
-                      >
-                        <Edit3 size={13} />
-                        <span>Edit</span>
-                      </button>
+                      <div className="casefiles-actions-cell" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="btn-action"
+                          onClick={() => setEditingFile(f)}
+                          title="Edit File Record"
+                        >
+                          <Edit3 size={13} />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          className="btn-action btn-action-delete"
+                          onClick={() => setFileToDelete(f)}
+                          title="Permanently Delete File Record"
+                        >
+                          <Trash2 size={13} />
+                          <span>Delete</span>
+                        </button>
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -158,6 +195,50 @@ export default function CaseFiles() {
           onClose={() => setEditingFile(null)}
           onSaveSuccess={load}
         />
+      )}
+
+      {fileToDelete && (
+        <div className="modal-backdrop" onClick={() => !deleting && setFileToDelete(null)}>
+          <div className="delete-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="delete-modal-header">
+              <div className="delete-modal-icon-badge">
+                <AlertTriangle size={22} color="#dc2626" />
+              </div>
+              <div>
+                <h3>Delete Case File</h3>
+                <p className="delete-modal-subtitle">Permanent action — data cannot be recovered</p>
+              </div>
+            </div>
+
+            <div className="delete-modal-body">
+              <p>
+                Are you sure you want to permanently delete file <strong className="mono">{fileToDelete.fileId}</strong> (<em>{fileToDelete.fileName}</em>)?
+              </p>
+              <div className="delete-warning-box">
+                <strong>⚠️ Warning:</strong> All data regarding this file, including its paired RFID tag (<span className="mono">{fileToDelete.rfidTag}</span>), movement logs, and audit trail, will be <strong>completely wiped from the system</strong>.
+              </div>
+            </div>
+
+            <div className="delete-modal-footer">
+              <button
+                type="button"
+                className="btn-modal-cancel"
+                disabled={deleting}
+                onClick={() => setFileToDelete(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-modal-delete"
+                disabled={deleting}
+                onClick={handleConfirmDelete}
+              >
+                {deleting ? 'Wiping Data…' : 'Delete & Wipe All Data'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

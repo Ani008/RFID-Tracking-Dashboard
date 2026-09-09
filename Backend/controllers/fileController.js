@@ -1,6 +1,7 @@
 import File from '../models/File.js';
 import MovementLog from '../models/MovementLog.js';
 import AuditLog from '../models/AuditLog.js';
+import { normalizeRfidTag } from '../utils/rfidHelper.js';
 
 const VALID_LOCATIONS = ['SHELF_ROOM', 'COURT_ROOM', 'IN_TRANSIT'];
 
@@ -40,7 +41,15 @@ export async function listFiles(req, res, next) {
     if (caseId) filter.caseId = caseId;
     if (search) {
       const re = new RegExp(search, 'i');
-      filter.$or = [{ fileId: re }, { fileName: re }, { caseId: re }, { caseName: re }, { rfidTag: re }];
+      const normalizedSearch = normalizeRfidTag(search);
+      filter.$or = [
+        { fileId: re },
+        { fileName: re },
+        { caseId: re },
+        { caseName: re },
+        { rfidTag: re },
+        ...(normalizedSearch ? [{ rfidTag: normalizedSearch }] : []),
+      ];
     }
 
     const files = await File.find(filter).sort({ updatedAt: -1 });
@@ -57,14 +66,15 @@ export async function createFile(req, res, next) {
     if (errors.length > 0) return res.status(400).json({ errors });
 
     const { fileId, fileName, caseId, caseName, rfidTag, currentLocation } = req.body;
+    const normalizedTag = normalizeRfidTag(rfidTag);
 
-    const existing = await File.findOne({ $or: [{ fileId }, { rfidTag }] });
+    const existing = await File.findOne({ $or: [{ fileId: fileId.trim() }, { rfidTag: normalizedTag }] });
     if (existing) {
       return res.status(409).json({
         error:
-          existing.fileId === fileId
+          existing.fileId === fileId.trim()
             ? `File ID "${fileId}" already exists`
-            : `RFID tag "${rfidTag}" is already paired with file ${existing.fileId}`,
+            : `RFID tag "${normalizedTag}" is already paired with file ${existing.fileId}`,
       });
     }
 
@@ -73,7 +83,7 @@ export async function createFile(req, res, next) {
       fileName: fileName.trim(),
       caseId: caseId.trim(),
       caseName: caseName.trim(),
-      rfidTag: rfidTag.trim(),
+      rfidTag: normalizedTag,
       currentLocation: currentLocation || 'SHELF_ROOM',
     });
 
@@ -138,7 +148,7 @@ export async function updateFile(req, res, next) {
       });
     }
 
-    const trimmedNewTag = req.body.rfidTag ? req.body.rfidTag.trim() : undefined;
+    const trimmedNewTag = req.body.rfidTag ? normalizeRfidTag(req.body.rfidTag) : undefined;
 
     // Check duplicate rfidTag across other files
     if (trimmedNewTag && trimmedNewTag !== file.rfidTag) {
@@ -197,26 +207,26 @@ export async function updateFile(req, res, next) {
   }
 }
 
-// DELETE /api/files/:fileId  -> soft delete (archive)
+// DELETE /api/files/:fileId  -> permanently delete file and wipe all associated data (admin-only)
 export async function deleteFile(req, res, next) {
   try {
     const file = await File.findOne({ fileId: req.params.fileId });
     if (!file) return res.status(404).json({ error: `File "${req.params.fileId}" not found` });
 
-    file.archived = true;
-    await file.save();
+    const targetFileId = file.fileId;
+    const targetTag = file.rfidTag;
 
-    await AuditLog.create({
-      userId: req.user?._id,
-      username: req.user?.username || 'system',
-      action: 'FILE_ARCHIVE',
-      targetType: 'File',
-      targetId: file.fileId,
-      before: { archived: false },
-      after: { archived: true },
+    // Permanently wipe the file and all associated movement logs and audit records
+    await Promise.all([
+      File.deleteOne({ fileId: targetFileId }),
+      MovementLog.deleteMany({ fileId: targetFileId }),
+      AuditLog.deleteMany({ targetId: targetFileId }),
+    ]);
+
+    res.json({
+      message: `File "${targetFileId}" and all associated data wiped successfully`,
+      deletedFileId: targetFileId,
     });
-
-    res.json({ message: `File "${file.fileId}" archived`, file });
   } catch (err) {
     next(err);
   }

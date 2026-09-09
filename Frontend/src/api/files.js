@@ -24,3 +24,8 @@ export async function archiveFile(fileId) {
   const { data } = await apiClient.delete(`/files/${fileId}`);
   return data;
 }
+
+export async function deleteFile(fileId) {
+  const { data } = await apiClient.delete(`/files/${fileId}`);
+  return data;
+}

@@ -36,6 +36,7 @@
  * app first.
  */
 import { SerialPort } from 'serialport';
+import { normalizeRfidTag } from '../utils/rfidHelper.js';
 
 const TAG = '[scanner]';
 
@@ -197,7 +198,8 @@ export function initDesktopScanner(onTagScanned) {
       return;
     }
 
-    const uid = chunk.subarray(4).toString('hex').toUpperCase();
+    const rawUid = chunk.subarray(4).toString('hex').toUpperCase();
+    const uid = normalizeRfidTag(rawUid);
     const now = Date.now();
 
     const isSameTagStillDown = uid === lastUid && now - lastSeenAt < CONFIG.reScanCooldownMs;
@@ -209,9 +211,10 @@ export function initDesktopScanner(onTagScanned) {
       return;
     }
 
-    console.log(`${TAG} Tag scanned: ${uid}`);
+    console.log(`${TAG} Tag scanned: ${uid} (raw: ${rawUid})`);
     onTagScanned({
       uid,
+      rawUid,
       deviceId: 'rfg-wd01-desktop-scanner',
       timestamp: new Date().toISOString(),
       raw: chunk.toString('hex').toUpperCase(),

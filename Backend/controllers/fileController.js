@@ -53,7 +53,6 @@ export async function listFiles(req, res, next) {
     }
 
     const files = await File.find(filter).sort({ updatedAt: -1 });
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.json({ items: files, total: files.length });
   } catch (err) {
     next(err);
@@ -208,32 +207,26 @@ export async function updateFile(req, res, next) {
   }
 }
 
-// DELETE /api/files/:fileId  -> permanently delete file and wipe all associated data (admin-only)
+// DELETE /api/files/:fileId  -> soft delete (archive)
 export async function deleteFile(req, res, next) {
   try {
-    const rawFileId = String(req.params.fileId || '').trim();
-    const file = await File.findOne({
-      $or: [
-        { fileId: rawFileId },
-        { fileId: new RegExp(`^${rawFileId}$`, 'i') },
-      ],
+    const file = await File.findOne({ fileId: req.params.fileId });
+    if (!file) return res.status(404).json({ error: `File "${req.params.fileId}" not found` });
+
+    file.archived = true;
+    await file.save();
+
+    await AuditLog.create({
+      userId: req.user?._id,
+      username: req.user?.username || 'system',
+      action: 'FILE_ARCHIVE',
+      targetType: 'File',
+      targetId: file.fileId,
+      before: { archived: false },
+      after: { archived: true },
     });
-    if (!file) return res.status(404).json({ error: `File "${rawFileId}" not found` });
 
-    const targetFileId = file.fileId;
-    const targetTag = file.rfidTag;
-
-    // Permanently wipe the file and all associated movement logs and audit records
-    await Promise.all([
-      File.deleteOne({ _id: file._id }),
-      MovementLog.deleteMany({ fileId: targetFileId }),
-      AuditLog.deleteMany({ targetId: targetFileId }),
-    ]);
-
-    res.json({
-      message: `File "${targetFileId}" and all associated data wiped successfully`,
-      deletedFileId: targetFileId,
-    });
+    res.json({ message: `File "${file.fileId}" archived`, file });
   } catch (err) {
     next(err);
   }

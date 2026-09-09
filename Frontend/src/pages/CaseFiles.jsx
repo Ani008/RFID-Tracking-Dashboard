@@ -69,13 +69,16 @@ export default function CaseFiles() {
 
   async function handleConfirmDelete() {
     if (!fileToDelete) return;
+    const targetId = fileToDelete.fileId;
     setDeleting(true);
     setError(null);
     try {
-      await deleteFile(fileToDelete.fileId);
+      await deleteFile(targetId);
+      // Immediately remove from local state so UI updates instantly
+      setFiles((prev) => prev.filter((f) => f.fileId !== targetId));
       setNotification({
         type: 'success',
-        message: `File ${fileToDelete.fileId} and all associated movement history have been wiped.`,
+        message: `File "${targetId}" and all associated movement history have been wiped.`,
       });
       setFileToDelete(null);
       await load();

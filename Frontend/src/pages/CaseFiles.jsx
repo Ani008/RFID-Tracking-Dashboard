@@ -159,16 +159,26 @@ export default function CaseFiles() {
                     <td style={{ textAlign: 'right' }}>
                       <div className="casefiles-actions-cell" onClick={(e) => e.stopPropagation()}>
                         <button
+                          type="button"
                           className="btn-action"
-                          onClick={() => setEditingFile(f)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            setEditingFile(f);
+                          }}
                           title="Edit File Record"
                         >
                           <Edit3 size={13} />
                           <span>Edit</span>
                         </button>
                         <button
+                          type="button"
                           className="btn-action btn-action-delete"
-                          onClick={() => setFileToDelete(f)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            setFileToDelete(f);
+                          }}
                           title="Permanently Delete File Record"
                         >
                           <Trash2 size={13} />
@@ -201,7 +211,7 @@ export default function CaseFiles() {
       )}
 
       {fileToDelete && (
-        <div className="modal-backdrop" onClick={() => !deleting && setFileToDelete(null)}>
+        <div className="modal-overlay" onClick={() => !deleting && setFileToDelete(null)}>
           <div className="delete-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="delete-modal-header">
               <div className="delete-modal-icon-badge">

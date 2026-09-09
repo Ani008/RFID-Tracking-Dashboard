@@ -127,13 +127,28 @@ export function createFrameParser() {
  */
 export function parseTagFrame(frame) {
   if (frame.cid1 !== CID1.READ_UII) return null;
-  if (frame.rtn !== RTN.CMD_RESPONSE && frame.rtn !== RTN.AUTO_SEND) return null;
+  // Accept standard response (0x02), auto-send (0x05), and OK/success (0x00)
+  if (frame.rtn !== RTN.CMD_RESPONSE && frame.rtn !== RTN.AUTO_SEND && frame.rtn !== RTN.OK) return null;
   if (frame.length < 4) return null; // too short to hold ANT+PC+EPC+RSSI — it's the summary frame
 
   const info = frame.info;
-  const ant = info[0];
+  let ant = info[0];
+  if (ant === 0) ant = 1; // normalize 0-indexed antenna to 1
   const pc = info.readUInt16BE(1);
-  const epc = info.subarray(3, info.length - 1).toString('hex').toUpperCase();
   const rssi = info[info.length - 1];
+
+  // EPC Gen2: PC word (bits 15..11) gives EPC length in 16-bit words
+  const epcWordLen = (pc >> 11) & 0x1f;
+  const epcByteLen = epcWordLen * 2;
+
+  let epc;
+  if (epcByteLen > 0 && 3 + epcByteLen <= info.length) {
+    epc = info.subarray(3, 3 + epcByteLen).toString('hex').toUpperCase();
+  } else {
+    // Fallback: strip 2-byte CRC and 1-byte RSSI from end
+    const end = Math.max(3, info.length - 3);
+    epc = info.subarray(3, end).toString('hex').toUpperCase();
+  }
+
   return { ant, pc, epc, rssi };
 }

@@ -38,7 +38,7 @@
  * (typically the OUT side) so direction comes from which antenna fired,
  * not a guess.
  */
-import { createSerialTransport, createTcpTransport } from './transports.js';
+import { createSerialTransport, createTcpTransport } from './transport.js';
 import { buildCommand, createFrameParser, parseTagFrame, CID1, CID2 } from './protocol.js';
 
 const TAG = '[real-adapter]';
@@ -150,51 +150,70 @@ function connectReader(cfg, onTagBatch) {
     });
   }
 
+  let inventoryTimer = null;
+  let presenceCheckTimer = null;
+  const PRESENCE_TIMEOUT_MS = parseInt(process.env.READER_PRESENCE_TIMEOUT_MS, 10) || 5000;
+  const activeTags = new Map(); // Map<epc, { lastSeen: number, isPresent: boolean }>
+  const INVENTORY_CMD = buildCommand(CID1.READ_UII, CID2.NONE, Buffer.alloc(0));
+
   function enableActiveMode() {
     const info = buildBaseParamsInfo({ workingMode: 0x01, readType: 0x02, readIntervalTicks: 0x0a, buzzer: 0x01 });
     const cmd = buildCommand(CID1.SET_BASE_PARAMS, CID2.SET, info);
-    console.log(`${label} -> Set Base Parameters (Active mode): ${cmd.toString('hex').toUpperCase()}`);
+    console.log(`${label} -> Set Base Parameters (Active mode + Net Output): ${cmd.toString('hex').toUpperCase()}`);
     transport.write(cmd, (err) => {
       if (err) console.error(`${label} failed to send Set Base Parameters: ${err.message}`);
     });
+
+    if (inventoryTimer) clearInterval(inventoryTimer);
+    inventoryTimer = setInterval(() => {
+      transport.write(INVENTORY_CMD, () => {});
+    }, 200);
+
+    // Check for tags that went out of range every 1 second
+    if (presenceCheckTimer) clearInterval(presenceCheckTimer);
+    presenceCheckTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [epc, state] of activeTags.entries()) {
+        if (state.isPresent && now - state.lastSeen > PRESENCE_TIMEOUT_MS) {
+          state.isPresent = false;
+          console.log(`\n======================================================`);
+          console.log(`${label} 📤 Tag LEFT antenna range: ${epc} -> ${cfg.gateId}:OUT`);
+          console.log(`======================================================\n`);
+          triggerMovement(cfg.gateId, 'OUT', [epc]);
+        }
+      }
+    }, 1000);
   }
 
   function handleFrame(frame) {
     const tag = parseTagFrame(frame);
     if (!tag) return; // command ack / inventory-summary frame, not a tag read
 
-    const direction = cfg.antennaMap[String(tag.ant)];
-    if (!direction) {
-      console.warn(`${label} tag read from unmapped antenna ${tag.ant} (EPC ${tag.epc}) — add it to antennaMap`);
-      return;
+    const now = Date.now();
+    const epc = tag.epc;
+    const existing = activeTags.get(epc);
+
+    if (!existing || !existing.isPresent) {
+      activeTags.set(epc, { lastSeen: now, isPresent: true });
+      console.log(`\n======================================================`);
+      console.log(`${label} 📥 Tag ENTERED antenna range: ${epc} (ANT=${tag.ant}, RSSI=0x${tag.rssi.toString(16)}) -> ${cfg.gateId}:IN`);
+      console.log(`======================================================\n`);
+      triggerMovement(cfg.gateId, 'IN', [epc]);
+    } else {
+      existing.lastSeen = now;
     }
-
-    console.log(`${label} EPC=${tag.epc} ANT=${tag.ant} RSSI=0x${tag.rssi.toString(16)} -> ${cfg.gateId}:${direction}`);
-    bufferRead(direction, tag.epc);
   }
 
-  function bufferRead(direction, epc) {
-    const key = `${cfg.gateId}:${direction}`;
-    if (!batches.has(key)) batches.set(key, { epcs: new Set(), timer: null });
-    const b = batches.get(key);
-    b.epcs.add(epc);
-    clearTimeout(b.timer);
-    b.timer = setTimeout(() => flush(key, direction), BATCH_WINDOW_MS);
-  }
-
-  async function flush(key, direction) {
-    const b = batches.get(key);
-    if (!b) return;
-    batches.delete(key);
+  async function triggerMovement(gateId, direction, epcs) {
     try {
       const result = await onTagBatch({
-        gateId: cfg.gateId,
+        gateId,
         direction,
-        epcs: [...b.epcs],
+        epcs,
         deviceId: cfg.id,
         timestamp: new Date().toISOString(),
       });
-      console.log(`${label} batch processed: ${result.matchedCount} matched, ${result.unknownCount} unknown`);
+      console.log(`${label} batch processed (${direction}): ${result.matchedCount} matched, ${result.unknownCount} unknown`);
     } catch (err) {
       console.error(`${label} onTagBatch failed: ${err.message}`);
     }
@@ -214,7 +233,8 @@ function connectReader(cfg, onTagBatch) {
     close: () => {
       closedByUs = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      for (const b of batches.values()) clearTimeout(b.timer);
+      if (inventoryTimer) clearInterval(inventoryTimer);
+      if (presenceCheckTimer) clearInterval(presenceCheckTimer);
       transport?.close();
     },
   };
@@ -223,7 +243,7 @@ function connectReader(cfg, onTagBatch) {
 /** Builds the 27-byte INFO payload for Set Base Parameters (spec 4.22). */
 function buildBaseParamsInfo({ workingMode, readType, readIntervalTicks, buzzer }) {
   return Buffer.from([
-    0x00, // OM output mode — not used by us; see file header note
+    0x09, // OM output mode — 0x09 (0x01 Serial + 0x08 Network auto-output)
     workingMode, // WM: 0x01 = Active (auto-report, no polling needed)
     readType, // RT: 0x02 = EPC only
     readIntervalTicks, // RI: reading interval, x10ms

@@ -9,7 +9,7 @@
  * mock simulator or a physical reader.
  */
 import { initMockAdapter } from "./mock-adapter.js";
-import { initCr15Adapter } from "./cr15-adapter.js";
+import { initRealAdapter } from "./real-adapter.js";
 
 /**
  * @param {import('express').Express} app
@@ -20,10 +20,11 @@ export function initReaderAgent(app, onTagBatch) {
   const mode = (process.env.READER_MODE || "mock").toLowerCase();
 
   if (mode === "real") {
-    console.log("[reader-agent] Starting in CR15 hardware mode");
-    return initCr15Adapter(onTagBatch);
+    console.log("[reader-agent] Starting in REAL hardware mode (TCP/LAN or Serial)");
+    return initRealAdapter(app, onTagBatch);
   }
 
   console.log("[reader-agent] Starting in MOCK simulator mode");
   return initMockAdapter(app, onTagBatch);
 }
+

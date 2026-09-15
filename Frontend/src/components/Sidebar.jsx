@@ -32,7 +32,6 @@ export default function Sidebar() {
         { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
         { to: '/files', label: 'Case Files', icon: FolderOpen },
         ...(isAdmin ? [{ to: '/register', label: 'Register File', icon: Tag }] : []),
-        { to: '/simulator', label: 'Reader Simulator', icon: Radio },
       ],
     },
     {
@@ -44,14 +43,6 @@ export default function Sidebar() {
         { to: '/reports', label: 'Reports', icon: FileBarChart },
       ],
     },
-    ...(isAdmin
-      ? [
-          {
-            label: 'Administration',
-            items: [{ to: '/users', label: 'User Accounts', icon: UsersIcon }],
-          },
-        ]
-      : []),
   ];
 
   const initials = (user?.fullName || user?.username || 'U')
@@ -116,7 +107,7 @@ export default function Sidebar() {
 
       <div className="sidebar-footer">
         <span className="sidebar-footer-dot" />
-        Reader mode: mock
+        Developed & Maintained by <a href="https://calyonix.com/" target="_blank" rel="noopener noreferrer">CALYONIX INFOTECH</a>
       </div>
     </aside>
   );

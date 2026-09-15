@@ -10,7 +10,6 @@ import RegisterFile from './pages/RegisterFile.jsx';
 import MovementLog from './pages/MovementLog.jsx';
 import CourtRoomStatus from './pages/CourtRoomStatus.jsx';
 import Gates from './pages/Gates.jsx';
-import ReaderSimulator from './pages/ReaderSimulator.jsx';
 import Users from './pages/Users.jsx';
 import Reports from './pages/Reports.jsx';
 
@@ -44,7 +43,6 @@ export default function App() {
             <Route path="/movements" element={<MovementLog />} />
             <Route path="/gates" element={<Gates />} />
             <Route path="/reports" element={<Reports />} />
-            <Route path="/simulator" element={<ReaderSimulator />} />
             <Route
               path="/users"
               element={

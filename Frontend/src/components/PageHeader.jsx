@@ -14,8 +14,7 @@ export default function PageHeader({ title, subtitle, actions }) {
       <div className="page-header-right">
         {actions}
         <span className={`status-pill ${isConnected ? 'status-pill--live' : 'status-pill--down'}`}>
-          <span className="status-pill-dot" />
-          {isConnected ? 'Live · Mock Reader' : 'Backend Offline'}
+    
         </span>
         <div className="avatar">A</div>
       </div>

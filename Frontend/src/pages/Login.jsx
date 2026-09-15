@@ -1,14 +1,13 @@
-import React, { useState, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext.jsx';
-import { Eye, EyeOff, AlertCircle, ArrowRight } from 'lucide-react';
-import './Login.css';
+import React, { useState, useRef } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import { useAuth } from "../context/AuthContext.jsx";
+import { Eye, EyeOff, AlertCircle, ArrowRight } from "lucide-react";
+import "./Login.css";
 
 export default function Login() {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -21,7 +20,7 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const from = location.state?.from?.pathname || '/';
+  const from = location.state?.from?.pathname || "/";
 
   const handleMouseMove = (e) => {
     if (!imagePanelRef.current) return;
@@ -49,19 +48,20 @@ export default function Login() {
 
   const handleMouseLeave = () => {
     setTiltStyle({
-      transform: 'perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)',
-      transition: 'transform 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
+      transform:
+        "perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)",
+      transition: "transform 0.5s cubic-bezier(0.16, 1, 0.3, 1)",
     });
     setGlareStyle({
       opacity: 0,
-      transition: 'opacity 0.5s ease',
+      transition: "opacity 0.5s ease",
     });
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!username.trim() || !password) {
-      setError('Please select a role and enter your password');
+      setError("Please select a role and enter your password");
       return;
     }
 
@@ -71,7 +71,7 @@ export default function Login() {
       await login(username.trim(), password);
       navigate(from, { replace: true });
     } catch (err) {
-      setError(err.message || 'Invalid credentials');
+      setError(err.message || "Invalid credentials");
     } finally {
       setSubmitting(false);
     }
@@ -136,7 +136,7 @@ export default function Login() {
               <div className="field-input-container">
                 <input
                   id="password"
-                  type={showPassword ? 'text' : 'password'}
+                  type={showPassword ? "text" : "password"}
                   className="modern-underline-input"
                   placeholder="••••••••••••"
                   value={password}
@@ -148,22 +148,11 @@ export default function Login() {
                   type="button"
                   className="password-toggle-btn"
                   onClick={() => setShowPassword(!showPassword)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
-            </div>
-
-            <div className="form-options-row">
-              <label className="remember-me-checkbox">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                />
-                <span>Remember me</span>
-              </label>
             </div>
 
             <button
@@ -183,7 +172,19 @@ export default function Login() {
           </form>
 
           <div className="login-page-footer">
-            Official Judicial Record System • Authorized Personnel Only
+            <div>
+              Official Judicial Record System • Authorized Personnel Only
+            </div>
+            <div className="login-credit">
+              Developed & Maintained by{" "}
+              <a
+                href="https://calyonix.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                CALYONIX INFOTECH
+              </a>
+            </div>
           </div>
         </div>
       </div>

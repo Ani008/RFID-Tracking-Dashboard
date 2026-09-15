@@ -1,6 +1,6 @@
-import React from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext.jsx';
+import React from "react";
+import { NavLink, useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext.jsx";
 import {
   Scale,
   LayoutDashboard,
@@ -13,8 +13,8 @@ import {
   FileBarChart,
   Users as UsersIcon,
   LogOut,
-} from 'lucide-react';
-import './Sidebar.css';
+} from "lucide-react";
+import "./Sidebar.css";
 
 export default function Sidebar() {
   const { user, logout, isAdmin } = useAuth();
@@ -22,33 +22,39 @@ export default function Sidebar() {
 
   const handleLogout = async () => {
     await logout();
-    navigate('/login');
+    navigate("/login");
   };
 
   const navGroups = [
     {
-      label: 'Operations',
+      label: "Operations",
       items: [
-        { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-        { to: '/files', label: 'Case Files', icon: FolderOpen },
-        ...(isAdmin ? [{ to: '/register', label: 'Register File', icon: Tag }] : []),
+        { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+        { to: "/files", label: "Case Files", icon: FolderOpen },
+        ...(isAdmin
+          ? [{ to: "/register", label: "Register File", icon: Tag }]
+          : []),
       ],
     },
     {
-      label: 'Monitoring & Reports',
+      label: "Monitoring & Reports",
       items: [
-        { to: '/court-room-status', label: 'Court Room Status', icon: MapPinned },
-        { to: '/movements', label: 'Movement Log', icon: Activity },
-        { to: '/gates', label: 'RFID Gates', icon: DoorOpen },
-        { to: '/reports', label: 'Reports', icon: FileBarChart },
+        {
+          to: "/court-room-status",
+          label: "Court Room Status",
+          icon: MapPinned,
+        },
+        { to: "/movements", label: "Movement Log", icon: Activity },
+        { to: "/gates", label: "RFID Gates", icon: DoorOpen },
+        { to: "/reports", label: "Reports", icon: FileBarChart },
       ],
     },
   ];
 
-  const initials = (user?.fullName || user?.username || 'U')
-    .split(' ')
+  const initials = (user?.fullName || user?.username || "U")
+    .split(" ")
     .map((n) => n[0])
-    .join('')
+    .join("")
     .substring(0, 2)
     .toUpperCase();
 
@@ -73,7 +79,9 @@ export default function Sidebar() {
                 key={to}
                 to={to}
                 end={end}
-                className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
+                className={({ isActive }) =>
+                  `sidebar-link${isActive ? " active" : ""}`
+                }
               >
                 <Icon size={17} strokeWidth={1.9} />
                 <span>{label}</span>
@@ -88,7 +96,10 @@ export default function Sidebar() {
           <div className="sidebar-user-profile">
             <div className="sidebar-user-avatar">{initials}</div>
             <div className="sidebar-user-info">
-              <div className="sidebar-user-name" title={user.fullName || user.username}>
+              <div
+                className="sidebar-user-name"
+                title={user.fullName || user.username}
+              >
                 {user.fullName || user.username}
               </div>
               <div className="sidebar-user-role">{user.role}</div>
@@ -107,7 +118,16 @@ export default function Sidebar() {
 
       <div className="sidebar-footer">
         <span className="sidebar-footer-dot" />
-        Developed & Maintained by <a href="https://calyonix.com/" target="_blank" rel="noopener noreferrer">CALYONIX INFOTECH</a>
+        <span>
+          Developed & Maintained by{" "}
+          <a
+            href="https://calyonix.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            CALYONIX INFOTECH
+          </a>
+        </span>
       </div>
     </aside>
   );

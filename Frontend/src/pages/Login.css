@@ -304,6 +304,22 @@
   color: #94a3b8;
 }
 
+.login-credit {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  color: #b0b8c4;
+}
+
+.login-credit a {
+  color: #64748b;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.login-credit a:hover {
+  color: #0f172a;
+  text-decoration: underline;
+}
 /* Responsive adjustment for mobile/tablet */
 @media (max-width: 820px) {
   .login-modal-container {

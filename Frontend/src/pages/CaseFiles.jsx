@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Edit3, Trash2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Search, Edit3, Trash2, AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
 import PageHeader from '../components/PageHeader.jsx';
 import { LocationBadge } from '../components/StatusBadge.jsx';
 import FileDetailModal from '../components/FileDetailModal.jsx';
@@ -8,6 +8,7 @@ import EditFileModal from '../components/EditFileModal.jsx';
 import { fetchFiles, deleteFile } from '../api/files.js';
 import { useConnection } from '../context/ConnectionContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import '../styles/forms.css';
 import './CaseFiles.css';
 
 const LOCATIONS = [
@@ -31,29 +32,36 @@ export default function CaseFiles() {
   const [editingFile, setEditingFile] = useState(null);
   const [fileToDelete, setFileToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
-  const [notification, setNotification] = useState(null); // { type: 'success' | 'error', message: string }
+  const [notification, setNotification] = useState(null);
+
+  // Pagination
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = {};
+      const params = { page, limit: pageSize };
       if (search) params.search = search;
       if (location) params.location = location;
       const res = await fetchFiles(params);
       setFiles(res.items);
+      setTotal(res.total ?? res.items.length);
+      setTotalPages(res.totalPages ?? 1);
       setError(null);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [search, location]);
+  }, [search, location, page, pageSize]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // Live-refresh the table when a new movement comes in.
   useEffect(() => {
     if (lastMovement) load();
   }, [lastMovement, load]);
@@ -64,7 +72,12 @@ export default function CaseFiles() {
     if (search) next.search = search;
     if (location) next.location = location;
     setSearchParams(next);
-    load();
+    setPage(1);
+  }
+
+  function handlePageSizeChange(e) {
+    setPageSize(Number(e.target.value));
+    setPage(1);
   }
 
   async function handleConfirmDelete() {
@@ -74,7 +87,6 @@ export default function CaseFiles() {
     setError(null);
     try {
       await deleteFile(targetId);
-      // Immediately remove from local state so UI updates instantly
       setFiles((prev) => prev.filter((f) => f.fileId !== targetId));
       setNotification({
         type: 'success',
@@ -192,6 +204,43 @@ export default function CaseFiles() {
             </tbody>
           </table>
         )}
+
+        {!error && !loading && files.length > 0 && (
+          <div className="pagination">
+            <span>
+              Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total} file(s)
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                Rows per page:
+                <select value={pageSize} onChange={handlePageSizeChange}>
+                  <option value={25}>25</option>
+                  <option value={75}>75</option>
+                  <option value={100}>100</option>
+                </select>
+              </label>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                >
+                  <ChevronLeft size={14} style={{ verticalAlign: 'middle' }} /> Prev
+                </button>
+                <span style={{ padding: '6px 10px' }}>
+                  Page {page} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                >
+                  Next <ChevronRight size={14} style={{ verticalAlign: 'middle' }} />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {selectedFileId && (
@@ -227,7 +276,6 @@ export default function CaseFiles() {
               <p>
                 Are you sure you want to permanently delete file <strong className="mono">{fileToDelete.fileId}</strong> (<em>{fileToDelete.fileName}</em>)?
               </p>
-
             </div>
 
             <div className="delete-modal-footer">

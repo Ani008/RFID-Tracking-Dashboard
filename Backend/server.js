@@ -1,19 +1,27 @@
-import 'dotenv/config';
-import http from 'http';
-import mongoose from 'mongoose';
+import "dotenv/config";
+import http from "http";
+import mongoose from "mongoose";
 
-import { createApp, finalizeApp } from './app.js';
-import { initSocket, emitMovement, emitTagScanned } from './sockets/index.js';
-import { initReaderAgent } from './reader-agent/index.js';
-import { initDesktopScanner } from './reader-agent/desktop-scanner-adapter.js';
-import { processMovementBatch } from './services/movementService.js';
+import { createApp, finalizeApp } from "./app.js";
+import { initSocket, emitMovement, emitTagScanned } from "./sockets/index.js";
+import { initReaderAgent } from "./reader-agent/index.js";
+import { initDesktopScanner } from "./reader-agent/desktop-scanner-adapter.js";
+import { processMovementBatch } from "./services/movementService.js";
+import File from "./models/File.js";
 
 const PORT = process.env.PORT || 4000;
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/rfid-tracker';
+const MONGODB_URI =
+  process.env.MONGODB_URI || "mongodb://localhost:27017/rfid-tracker";
 
 async function start() {
   await mongoose.connect(MONGODB_URI);
-  console.log('[db] connected to MongoDB');
+  console.log("[db] connected to MongoDB");
+  try {
+    await File.syncIndexes();
+    console.log("[db] File indexes synced");
+  } catch (err) {
+    console.error("[db] failed to sync File indexes", err);
+  }
 
   const app = createApp();
   const httpServer = http.createServer(app);
@@ -47,6 +55,6 @@ async function start() {
 }
 
 start().catch((err) => {
-  console.error('[server] failed to start', err);
+  console.error("[server] failed to start", err);
   process.exit(1);
 });

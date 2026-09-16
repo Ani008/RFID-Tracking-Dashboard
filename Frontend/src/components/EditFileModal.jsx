@@ -9,7 +9,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
   const [formData, setFormData] = useState({
     fileName: '',
     caseId: '',
-    caseName: '',
     rfidTag: '',
     reason: '',
   });
@@ -23,7 +22,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
       setFormData({
         fileName: file.fileName || '',
         caseId: file.caseId || '',
-        caseName: file.caseName || '',
         rfidTag: file.rfidTag || '',
         reason: '',
       });
@@ -39,7 +37,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!formData.fileName.trim() || !formData.caseId.trim() || !formData.caseName.trim() || !formData.rfidTag.trim()) {
+    if (!formData.fileName.trim() || !formData.caseId.trim() || !formData.rfidTag.trim()) {
       setError('All metadata fields are required');
       return;
     }
@@ -60,7 +58,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
       const updated = await updateFile(file.fileId, {
         fileName: formData.fileName.trim(),
         caseId: formData.caseId.trim(),
-        caseName: formData.caseName.trim(),
         rfidTag: normalizeRfidTag(formData.rfidTag),
         reason: formData.reason.trim(),
       });
@@ -160,21 +157,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
               />
             </div>
 
-            {/* 5. Case Name */}
-            <div className="edit-field">
-              <label className="edit-field-label" htmlFor="edit-caseName">
-                5. Case Name
-              </label>
-              <input
-                id="edit-caseName"
-                type="text"
-                className="edit-field-input"
-                placeholder="e.g. Verma vs. Union of India"
-                value={formData.caseName}
-                onChange={(e) => setFormData({ ...formData, caseName: e.target.value })}
-                required
-              />
-            </div>
 
             {/* 6. Paired RFID Tag */}
             <div className="edit-field">
@@ -185,7 +167,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
                 id="edit-rfidTag"
                 type="text"
                 className="edit-field-input mono"
-                placeholder="E2806894000040178F2A91B5"
                 value={formData.rfidTag}
                 onChange={(e) => {
                   setFormData({ ...formData, rfidTag: e.target.value });
@@ -225,7 +206,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
                 id="edit-reason"
                 type="text"
                 className="edit-field-input"
-                placeholder="e.g. Typo fix in case title / Replaced damaged tag"
                 value={formData.reason}
                 onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
               />

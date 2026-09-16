@@ -1,7 +1,7 @@
-import apiClient from './client.js';
+import apiClient from "./client.js";
 
 export async function fetchFiles(params = {}) {
-  const { data } = await apiClient.get('/files', { params });
+  const { data } = await apiClient.get("/files", { params });
   return data; // { items, total }
 }
 
@@ -11,7 +11,7 @@ export async function fetchFile(fileId) {
 }
 
 export async function createFile(payload) {
-  const { data } = await apiClient.post('/files', payload);
+  const { data } = await apiClient.post("/files", payload);
   return data;
 }
 
@@ -25,8 +25,18 @@ export async function archiveFile(fileId) {
   return data;
 }
 
-
 export async function deleteFile(fileId) {
   const { data } = await apiClient.delete(`/files/${fileId}`);
   return data;
+}
+
+export async function bulkUploadFiles(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  // Don't set Content-Type manually — the browser/axios needs to add the
+  // multipart boundary itself, which a hardcoded header would strip out.
+  const { data } = await apiClient.post("/files/bulk-upload", formData, {
+    timeout: 60000, // larger sheets take longer than the default 10s
+  });
+  return data; // { totalRows, insertedCount, skippedCount, errors }
 }

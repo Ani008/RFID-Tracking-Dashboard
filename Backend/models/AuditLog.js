@@ -16,7 +16,7 @@ const auditLogSchema = new Schema(
     },
     action: {
       type: String,
-      enum: ['FILE_CREATE', 'FILE_UPDATE', 'TAG_REASSIGN', 'FILE_ARCHIVE'],
+      enum: ['FILE_CREATE', 'FILE_UPDATE', 'TAG_REASSIGN', 'FILE_ARCHIVE', 'FILE_BULK_IMPORT'],
       required: true,
     },
     targetType: {

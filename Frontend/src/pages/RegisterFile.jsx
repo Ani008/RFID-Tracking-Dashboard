@@ -1,21 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import PageHeader from '../components/PageHeader.jsx';
-import { createFile } from '../api/files.js';
+import { createFile, bulkUploadFiles } from '../api/files.js';
 import { useScannerSocket } from '../hooks/useScannerSocket.js';
 import { normalizeRfidTag } from '../utils/rfid.js';
 import '../styles/forms.css';
 
-const EMPTY_FORM = { fileId: '', fileName: '', caseId: '', caseName: '', rfidTag: '' };
+const EMPTY_FORM = { fileId: '', fileName: '', caseId: '', rfidTag: '' };
 
 export default function RegisterFile() {
   const [form, setForm] = useState(EMPTY_FORM);
-  const [status, setStatus] = useState(null); // { type: 'success' | 'error', message }
+  const [status, setStatus] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const { isConnected: socketConnected, lastTag } = useScannerSocket();
 
-  // Auto-fill the RFID Tag field whenever the desktop scanner reports a UID.
-  // Only overwrites if the field is empty, so it never clobbers something
-  // you've already typed/pasted by hand.
+  const fileInputRef = useRef(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
+
   useEffect(() => {
     if (!lastTag) return;
     const cleanTag = normalizeRfidTag(lastTag.uid);
@@ -43,6 +46,30 @@ export default function RegisterFile() {
       setStatus({ type: 'error', message: err.message });
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  function handleFileSelect(e) {
+    const file = e.target.files?.[0] || null;
+    setSelectedFile(file);
+    setUploadResult(null);
+    setUploadError(null);
+  }
+
+  async function handleBulkUpload() {
+    if (!selectedFile) return;
+    setUploading(true);
+    setUploadResult(null);
+    setUploadError(null);
+    try {
+      const result = await bulkUploadFiles(selectedFile);
+      setUploadResult(result);
+      setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err) {
+      setUploadError(err.message);
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -102,16 +129,6 @@ export default function RegisterFile() {
               required
             />
           </div>
-          <div className="field">
-            <label htmlFor="caseName">Case Name</label>
-            <input
-              id="caseName"
-              value={form.caseName}
-              onChange={(e) => update('caseName', e.target.value)}
-              placeholder="Verma vs. Union of India"
-              required
-            />
-          </div>
           <div className="field full">
             <label htmlFor="rfidTag">RFID Tag (EPC)</label>
             <input
@@ -133,6 +150,60 @@ export default function RegisterFile() {
           {submitting ? 'Registering…' : 'Register File'}
         </button>
       </form>
+
+      <div className="form-card" style={{ marginTop: '1.5rem' }}>
+        <div style={{ marginBottom: '14px' }}>
+          <h3 style={{ margin: 0, fontSize: '15px' }}>Bulk Register from Excel</h3>
+          <p className="field-hint" style={{ marginTop: '4px' }}>
+            Upload an .xlsx/.xls/.csv sheet with columns <strong>FileId</strong>,{' '}
+            <strong>CaseId</strong>, and <strong>FileName</strong> to register many files at
+            once. RFID tags aren't included in the sheet — pair each file with its tag afterwards
+            from the file's edit screen or by scanning it.
+          </p>
+        </div>
+
+        {uploadError && <div className="banner banner-error">{uploadError}</div>}
+
+        {uploadResult && (
+          <div className="banner banner-success">
+            Processed {uploadResult.totalRows} row(s): {uploadResult.insertedCount} registered,{' '}
+            {uploadResult.skippedCount} skipped.
+            {uploadResult.errors?.length > 0 && (
+              <details style={{ marginTop: '8px' }}>
+                <summary style={{ cursor: 'pointer' }}>
+                  View {uploadResult.errors.length} skipped row(s)
+                  {uploadResult.truncatedErrorCount > 0 ? ` (+${uploadResult.truncatedErrorCount} more not shown)` : ''}
+                </summary>
+                <ul style={{ marginTop: '8px', paddingLeft: '18px', fontSize: '12.5px' }}>
+                  {uploadResult.errors.map((e, i) => (
+                    <li key={i}>
+                      {e.row ? `Row ${e.row}` : 'Row'}
+                      {e.fileId ? ` (${e.fileId})` : ''}: {e.reason}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            onChange={handleFileSelect}
+          />
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={handleBulkUpload}
+            disabled={!selectedFile || uploading}
+          >
+            {uploading ? 'Uploading…' : 'Upload Excel Sheet'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -350,6 +350,10 @@ export async function updateFile(req, res, next) {
 
     const trimmedNewTag = req.body.rfidTag ? normalizeRfidTag(req.body.rfidTag) : undefined;
 
+    if (req.body.rfidTag && !trimmedNewTag) {
+      return res.status(400).json({ error: 'rfidTag must contain hexadecimal characters (0-9, A-F)' });
+    }
+
     if (trimmedNewTag && trimmedNewTag !== file.rfidTag) {
       const conflict = await File.findOne({
         rfidTag: trimmedNewTag,
@@ -368,8 +372,11 @@ export async function updateFile(req, res, next) {
     let hasTagChange = false;
 
     for (const field of editableFields) {
+      // An empty rfidTag means "leave the tag as is", never "clear it"
+      if (field === 'rfidTag' && !req.body.rfidTag) continue;
       if (field in req.body) {
-        const newVal = typeof req.body[field] === 'string' ? req.body[field].trim() : req.body[field];
+        let newVal = typeof req.body[field] === 'string' ? req.body[field].trim() : req.body[field];
+        if (field === 'rfidTag') newVal = normalizeRfidTag(newVal);
         if (newVal !== file[field]) {
           before[field] = file[field];
           after[field] = newVal;

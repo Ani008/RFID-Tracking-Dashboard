@@ -13,7 +13,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
     reason: '',
   });
   const [originalTag, setOriginalTag] = useState('');
-  const [tagConfirmed, setTagConfirmed] = useState(false);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -26,7 +25,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
         reason: '',
       });
       setOriginalTag(file.rfidTag || '');
-      setTagConfirmed(false);
     }
   }, [file]);
 
@@ -39,16 +37,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
 
     if (!formData.fileName.trim() || !formData.caseId.trim() || !formData.rfidTag.trim()) {
       setError('All metadata fields are required');
-      return;
-    }
-
-    if (isTagChanged && !tagConfirmed) {
-      setError('Please acknowledge and confirm the RFID Tag reassignment before saving');
-      return;
-    }
-
-    if (isTagChanged && !formData.reason.trim()) {
-      setError('Reason for Edit is mandatory when changing the paired RFID Tag');
       return;
     }
 
@@ -88,25 +76,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
 
         <form onSubmit={handleSubmit}>
           <div className="edit-modal-body">
-            {error && (
-              <div
-                style={{
-                  padding: '0.85rem 1rem',
-                  background: '#fef2f2',
-                  border: '1px solid #fecaca',
-                  borderRadius: '8px',
-                  color: '#b91c1c',
-                  fontSize: '0.88rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                }}
-              >
-                <AlertTriangle size={18} />
-                <span>{error}</span>
-              </div>
-            )}
-
             {/* 1. File ID */}
             <div className="edit-field">
               <label className="edit-field-label">1. File ID (Permanent)</label>
@@ -168,10 +137,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
                 type="text"
                 className="edit-field-input mono"
                 value={formData.rfidTag}
-                onChange={(e) => {
-                  setFormData({ ...formData, rfidTag: e.target.value });
-                  setTagConfirmed(false);
-                }}
+                onChange={(e) => setFormData({ ...formData, rfidTag: e.target.value })}
                 required
               />
 
@@ -185,14 +151,6 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
                     You are reassigning this file from tag <code>{originalTag}</code> to{' '}
                     <code>{formData.rfidTag}</code>. This change will be permanently logged in the audit trail.
                   </div>
-                  <label className="edit-confirm-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={tagConfirmed}
-                      onChange={(e) => setTagConfirmed(e.target.checked)}
-                    />
-                    <span>I confirm this physical RFID tag replacement</span>
-                  </label>
                 </div>
               )}
             </div>
@@ -206,11 +164,32 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
                 id="edit-reason"
                 type="text"
                 className="edit-field-input"
+                placeholder="Optional"
                 value={formData.reason}
                 onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
               />
             </div>
           </div>
+
+          {error && (
+            <div
+              style={{
+                margin: '0 1.75rem 1rem',
+                padding: '0.85rem 1rem',
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: '8px',
+                color: '#b91c1c',
+                fontSize: '0.88rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+              }}
+            >
+              <AlertTriangle size={18} />
+              <span>{error}</span>
+            </div>
+          )}
 
           {/* Footer */}
           <div className="edit-modal-footer">
@@ -220,7 +199,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
             <button
               type="submit"
               className="btn-primary"
-              disabled={saving || (isTagChanged && !tagConfirmed)}
+              disabled={saving}
             >
               <Save size={16} />
               <span>{saving ? 'Saving...' : 'Save Changes'}</span>

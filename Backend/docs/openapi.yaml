@@ -1,0 +1,361 @@
+openapi: 3.0.3
+info:
+  title: RFID File-Tracking Dashboard – Read-Only API
+  version: 1.0.0
+  description: |
+    Read-only (GET) JSON API of the Allahabad High Court RFID file-tracking system.
+    Use it to pull file locations, gate movements and reports into another dashboard.
+
+    - No authentication token. No write endpoints (POST/PUT/DELETE return 405).
+    - Rate limit: 120 requests / minute / IP (HTTP 429 when exceeded).
+    - All timestamps are ISO-8601 UTC.
+servers:
+  - url: http://<MY_VPS_IP>:4000
+    description: VPS (replace with the real IP / domain and port)
+tags:
+  - name: System
+  - name: Files
+  - name: Gates
+  - name: Movements
+  - name: Reports
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      responses:
+        '200':
+          description: Server is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /api/public/files:
+    get:
+      tags: [Files]
+      summary: List case files
+      description: |
+        Returns non-archived files, newest update first.
+        Pagination is opt-in: without `page` ALL matching files are returned; pass `page` to paginate.
+      parameters:
+        - { name: location, in: query, schema: { $ref: '#/components/schemas/Location' } }
+        - { name: caseId, in: query, schema: { type: string }, example: CASE-2024-001 }
+        - name: search
+          in: query
+          description: Case-insensitive match on fileId, fileName, caseId, caseName or rfidTag
+          schema: { type: string }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: limit, in: query, description: 'Default 25, max 200 (only with page)', schema: { type: integer, minimum: 1, maximum: 200, default: 25 } }
+      responses:
+        '200':
+          description: List of files
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/public/files/{fileId}:
+    get:
+      tags: [Files]
+      summary: Get one file with its movement history
+      parameters:
+        - { name: fileId, in: path, required: true, schema: { type: string }, example: F-0001 }
+      responses:
+        '200':
+          description: File and up to 200 latest movements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file: { $ref: '#/components/schemas/File' }
+                  history:
+                    type: array
+                    items: { $ref: '#/components/schemas/MovementLog' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/public/gates:
+    get:
+      tags: [Gates]
+      summary: List RFID gates
+      responses:
+        '200':
+          description: Gates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Gate' }
+                  total: { type: integer }
+
+  /api/public/movements:
+    get:
+      tags: [Movements]
+      summary: List gate movements (paginated, newest first)
+      parameters:
+        - { name: gateId, in: query, schema: { $ref: '#/components/schemas/GateId' } }
+        - { name: from, in: query, description: Start date-time (inclusive), schema: { type: string, format: date-time } }
+        - { name: to, in: query, description: End date-time (inclusive), schema: { type: string, format: date-time } }
+        - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 25, maximum: 200 } }
+      responses:
+        '200':
+          description: Movements
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementList' }
+
+  /api/public/reports/court-room-files:
+    get:
+      tags: [Reports]
+      summary: Files currently in the court room, with dwell time and overstay flag
+      parameters:
+        - { name: from, in: query, description: Filter on lastMovementAt >=, schema: { type: string, format: date-time } }
+        - { name: to, in: query, description: Filter on lastMovementAt <=, schema: { type: string, format: date-time } }
+        - { name: thresholdHours, in: query, description: Overstay threshold in hours, schema: { type: number, default: 4 } }
+      responses:
+        '200':
+          description: Court-room files
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/File'
+                        - type: object
+                          properties:
+                            dwellMinutes: { type: integer, example: 135 }
+                            dwellHours: { type: number, example: 2.3 }
+                            overstay: { type: boolean }
+                  total: { type: integer }
+                  overstayCount: { type: integer }
+                  thresholdHours: { type: number }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/public/reports/shelf-room-files:
+    get:
+      tags: [Reports]
+      summary: Files currently in the shelf / record room
+      responses:
+        '200':
+          description: Shelf-room files
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/File' }
+                  total: { type: integer }
+
+  /api/public/reports/movements:
+    get:
+      tags: [Reports]
+      summary: Movement history report (filterable, paginated)
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: gateId, in: query, schema: { $ref: '#/components/schemas/GateId' } }
+        - { name: direction, in: query, schema: { $ref: '#/components/schemas/Direction' } }
+        - { name: search, in: query, description: 'Matches fileId, rfidTag or batchId', schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200':
+          description: Movements
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/public/reports/unknown-tags:
+    get:
+      tags: [Reports]
+      summary: Scans of RFID tags not registered to any file
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: gateId, in: query, schema: { $ref: '#/components/schemas/GateId' } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200':
+          description: Unknown tag scans
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/UnknownTag' }
+                  page: { type: integer }
+                  limit: { type: integer }
+                  total: { type: integer }
+                  totalPages: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/public/reports/case/{caseId}:
+    get:
+      tags: [Reports]
+      summary: Summary of all files of one case
+      parameters:
+        - { name: caseId, in: path, required: true, schema: { type: string }, example: CASE-2024-001 }
+      responses:
+        '200':
+          description: Case summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  caseId: { type: string }
+                  caseName: { type: string }
+                  totalFiles: { type: integer }
+                  locationSummary:
+                    type: object
+                    additionalProperties: { type: integer }
+                    example: { SHELF_ROOM: 2, COURT_ROOM: 1 }
+                  files:
+                    type: array
+                    items: { $ref: '#/components/schemas/File' }
+                  recentMovements:
+                    type: array
+                    description: Latest 30 movements for the case's files
+                    items: { $ref: '#/components/schemas/MovementLog' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/public/reports/{type}/export:
+    get:
+      tags: [Reports]
+      summary: Download a report as CSV
+      description: Max 5000 rows. Returns `text/csv` as an attachment.
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema: { type: string, enum: [court-room-files, movements, unknown-tags, case-summary] }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: gateId, in: query, schema: { $ref: '#/components/schemas/GateId' } }
+        - { name: direction, in: query, schema: { $ref: '#/components/schemas/Direction' } }
+        - { name: caseId, in: query, description: Required when type=case-summary, schema: { type: string } }
+        - { name: thresholdHours, in: query, description: Only for court-room-files, schema: { type: number, default: 4 } }
+      responses:
+        '200':
+          description: CSV file
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+components:
+  responses:
+    BadRequest:
+      description: Invalid query parameter
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    TooManyRequests:
+      description: Rate limit exceeded (120 requests/minute/IP)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string, example: 'File "F-9999" not found' }
+    Location:
+      type: string
+      enum: [SHELF_ROOM, COURT_ROOM, IN_TRANSIT]
+    GateId:
+      type: string
+      enum: [SHELF_ROOM_DOOR, COURT_ROOM_DOOR]
+    Direction:
+      type: string
+      enum: [IN, OUT]
+    File:
+      type: object
+      properties:
+        _id: { type: string, example: 665f1c2a9b1e4a0012ab34cd }
+        fileId: { type: string, example: F-0001 }
+        fileName: { type: string, example: Writ Petition 1234/2024 }
+        caseId: { type: string, example: CASE-2024-001 }
+        caseName: { type: string }
+        rfidTag: { type: string, description: Normalised EPC of the paired tag, example: E2000017221101441890A1B2 }
+        currentLocation: { $ref: '#/components/schemas/Location' }
+        lastMovementAt: { type: string, format: date-time }
+        archived: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    FileList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/File' }
+        total: { type: integer }
+        page: { type: integer, description: Only when paginated }
+        limit: { type: integer, description: Only when paginated }
+        totalPages: { type: integer, description: Only when paginated }
+    Gate:
+      type: object
+      properties:
+        _id: { type: string }
+        gateId: { $ref: '#/components/schemas/GateId' }
+        label: { type: string, example: Court Room Door }
+        location: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    MovementLog:
+      type: object
+      properties:
+        _id: { type: string }
+        rfidTag: { type: string }
+        fileId: { type: string }
+        gateId: { $ref: '#/components/schemas/GateId' }
+        direction: { $ref: '#/components/schemas/Direction' }
+        timestamp: { type: string, format: date-time }
+        deviceId: { type: string }
+        batchId: { type: string }
+        resultingLocation: { type: string, description: File location after this movement }
+    MovementList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MovementLog' }
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+    UnknownTag:
+      type: object
+      properties:
+        _id: { type: string }
+        rfidTag: { type: string }
+        gateId: { $ref: '#/components/schemas/GateId' }
+        direction: { $ref: '#/components/schemas/Direction' }
+        timestamp: { type: string, format: date-time }
+        deviceId: { type: string }
+        batchId: { type: string }

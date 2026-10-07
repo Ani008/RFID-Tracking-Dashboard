@@ -10,12 +10,22 @@ import fileRoutes from './routes/fileRoutes.js';
 import gateRoutes from './routes/gateRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yamljs';
+import publicRoutes from './routes/publicRoutes.js';
 
 export function createApp() {
   const app = express();
 
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  app.use('/api/public', publicRoutes);
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(YAML.load(path.join(__dirname, 'docs/openapi.yaml'))));
+
   // Security HTTP Headers
   app.use(helmet());
+  
 
   // Strict CORS policy
   const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173';

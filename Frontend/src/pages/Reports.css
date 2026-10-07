@@ -187,3 +187,41 @@
 .overstay-row {
   background: rgba(195, 63, 52, 0.04);
 }
+
+/* Daily Reports tab */
+.daily-day-badge {
+  margin-left: 0.5rem;
+  font-size: 0.7rem;
+}
+
+.daily-day-badge-muted {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.daily-count-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 160px;
+}
+
+.daily-count-cell strong {
+  min-width: 2.5rem;
+  font-size: 1rem;
+}
+
+.daily-bar-track {
+  flex: 1;
+  height: 8px;
+  background: var(--bg);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.daily-bar-fill {
+  height: 100%;
+  background: var(--accent-600);
+  border-radius: 999px;
+}

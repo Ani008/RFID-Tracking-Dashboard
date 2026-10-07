@@ -5,6 +5,7 @@ import {
   movementReport,
   unknownTags,
   caseSummary,
+  dailyTagging,
   exportReportCsv,
 } from '../controllers/reportController.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -18,6 +19,7 @@ router.get('/shelf-room-files', shelfRoomFiles);
 router.get('/movements', movementReport);
 router.get('/unknown-tags', unknownTags);
 router.get('/case/:caseId', caseSummary);
+router.get('/daily-tagging', dailyTagging);
 router.get('/:type/export', exportReportCsv);
 
 export default router;

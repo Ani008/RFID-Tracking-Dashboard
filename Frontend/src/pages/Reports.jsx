@@ -5,6 +5,7 @@ import {
   fetchMovementReport,
   fetchUnknownTags,
   fetchCaseSummary,
+  fetchDailyTagging,
   downloadReportCsv,
 } from '../api/reports.js';
 import {
@@ -17,6 +18,7 @@ import {
   Search,
   Filter,
   Layers,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -31,7 +33,29 @@ const REPORT_TABS = [
   { id: 'movements', label: 'Movement History', icon: Activity },
   { id: 'unknown-tags', label: 'Unknown EPC Scans', icon: AlertTriangle },
   { id: 'case-summary', label: 'Case-Level Summary', icon: Layers },
+  { id: 'daily-report', label: 'Daily Reports', icon: CalendarDays },
 ];
+
+// YYYY-MM-DD for the user's *local* calendar day (toISOString would give the UTC day,
+// which is the wrong day for the first hours of the morning in India).
+function toLocalDateString(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function formatDayLabel(dateStr) {
+  // `T00:00:00` without a "Z" is parsed as local time, so the label never shifts a day
+  return new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
 
 export default function Reports() {
   const [activeTab, setActiveTab] = useState('court-room-files');
@@ -58,17 +82,16 @@ export default function Reports() {
     const now = new Date();
 
     if (preset === 'today') {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      setFromDate(start.toISOString().slice(0, 10));
-      setToDate(now.toISOString().slice(0, 10));
+      setFromDate(toLocalDateString(now));
+      setToDate(toLocalDateString(now));
     } else if (preset === '7d') {
       const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      setFromDate(past.toISOString().slice(0, 10));
-      setToDate(now.toISOString().slice(0, 10));
+      setFromDate(toLocalDateString(past));
+      setToDate(toLocalDateString(now));
     } else if (preset === '30d') {
       const past = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      setFromDate(past.toISOString().slice(0, 10));
-      setToDate(now.toISOString().slice(0, 10));
+      setFromDate(toLocalDateString(past));
+      setToDate(toLocalDateString(now));
     } else if (preset === 'all') {
       setFromDate('');
       setToDate('');
@@ -104,6 +127,13 @@ export default function Reports() {
         }
         const res = await fetchCaseSummary(caseSearch.trim());
         setReportData(res);
+      } else if (activeTab === 'daily-report') {
+        // Daily report works on plain calendar days in the user's own time zone
+        const dailyParams = { tz: BROWSER_TIME_ZONE };
+        if (fromDate) dailyParams.from = fromDate;
+        if (toDate) dailyParams.to = toDate;
+        const res = await fetchDailyTagging(dailyParams);
+        setReportData(res);
       }
     } catch (err) {
       setError(err.message || 'Failed to generate report');
@@ -122,12 +152,18 @@ export default function Reports() {
       setExporting(true);
       setError(null);
       const params = {};
-      if (fromDate) params.from = `${fromDate}T00:00:00.000Z`;
-      if (toDate) params.to = `${toDate}T23:59:59.999Z`;
-      if (gateFilter) params.gateId = gateFilter;
-      if (directionFilter) params.direction = directionFilter;
-      if (activeTab === 'court-room-files') params.thresholdHours = thresholdHours;
-      if (activeTab === 'case-summary') params.caseId = caseSearch.trim();
+      if (activeTab === 'daily-report') {
+        params.tz = BROWSER_TIME_ZONE;
+        if (fromDate) params.from = fromDate;
+        if (toDate) params.to = toDate;
+      } else {
+        if (fromDate) params.from = `${fromDate}T00:00:00.000Z`;
+        if (toDate) params.to = `${toDate}T23:59:59.999Z`;
+        if (gateFilter) params.gateId = gateFilter;
+        if (directionFilter) params.direction = directionFilter;
+        if (activeTab === 'court-room-files') params.thresholdHours = thresholdHours;
+        if (activeTab === 'case-summary') params.caseId = caseSearch.trim();
+      }
 
       await downloadReportCsv(activeTab, params);
       setExportSuccess(true);
@@ -177,6 +213,7 @@ export default function Reports() {
             onClick={() => {
               setActiveTab(id);
               setPage(1);
+              setReportData(null); // don't render the previous tab's data in this tab's layout
             }}
           >
             <Icon size={16} />
@@ -646,6 +683,110 @@ export default function Reports() {
           )}
         </>
       )}
+
+      {/* Tab 5: Daily Reports (files tagged per day) */}
+      {activeTab === 'daily-report' && (() => {
+        const daily = reportData?.report === 'daily-tagging' ? reportData : null;
+        const peakCount = daily?.peakDay?.filesTagged || 0;
+
+        return (
+          <>
+            <div className="report-summary-cards">
+              <div className="report-summary-card">
+                <div className="user-stat-title">Tagged Today</div>
+                <div className="user-stat-value" style={{ color: 'var(--accent-600)' }}>
+                  {daily?.today?.filesTagged ?? 0}
+                </div>
+              </div>
+              <div className="report-summary-card">
+                <div className="user-stat-title">Tagged Yesterday</div>
+                <div className="user-stat-value">{daily?.yesterday?.filesTagged ?? 0}</div>
+              </div>
+              <div className="report-summary-card">
+                <div className="user-stat-title">Total in Selected Range</div>
+                <div className="user-stat-value" style={{ color: 'var(--green-600)' }}>
+                  {daily?.totalTagged ?? 0}
+                </div>
+              </div>
+              <div className="report-summary-card">
+                <div className="user-stat-title">Average per Working Day</div>
+                <div className="user-stat-value">{daily?.averagePerDay ?? 0}</div>
+              </div>
+              <div className="report-summary-card">
+                <div className="user-stat-title">Best Day</div>
+                <div className="user-stat-value" style={{ color: 'var(--amber-600)' }}>
+                  {daily?.peakDay ? daily.peakDay.filesTagged : 0}
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  {daily?.peakDay ? formatDayLabel(daily.peakDay.date) : '—'}
+                </div>
+              </div>
+            </div>
+
+            <div className="report-table-card">
+              <table className="users-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Files Tagged</th>
+                    <th>First-time Tags</th>
+                    <th>Re-assigned Tags</th>
+                    <th>Tagged By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                        Counting tagged files per day...
+                      </td>
+                    </tr>
+                  ) : !daily || daily.items.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                        No files were tagged in the selected date range.
+                      </td>
+                    </tr>
+                  ) : (
+                    daily.items.map((row) => (
+                      <tr key={row.date}>
+                        <td style={{ fontWeight: 600 }}>
+                          {formatDayLabel(row.date)}
+                          {row.date === daily.today?.date && (
+                            <span className="user-status-badge active daily-day-badge">Today</span>
+                          )}
+                          {row.date === daily.yesterday?.date && (
+                            <span className="user-status-badge daily-day-badge daily-day-badge-muted">Yesterday</span>
+                          )}
+                        </td>
+                        <td>
+                          <div className="daily-count-cell">
+                            <strong>{row.filesTagged}</strong>
+                            <div className="daily-bar-track">
+                              <div
+                                className="daily-bar-fill"
+                                style={{ width: `${peakCount ? Math.max(4, (row.filesTagged / peakCount) * 100) : 0}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                        <td>{row.firstTime}</td>
+                        <td>{row.reassigned}</td>
+                        <td style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                          {row.byUser.map((u) => `${u.username} (${u.count})`).join(', ') || '—'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+              <div className="report-pagination">
+
+              </div>
+            </div>
+          </>
+        );
+      })()}
 
       {selectedFileId && (
         <FileDetailModal

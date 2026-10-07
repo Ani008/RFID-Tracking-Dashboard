@@ -25,6 +25,11 @@ export async function fetchCaseSummary(caseId) {
   return data;
 }
 
+export async function fetchDailyTagging(params = {}) {
+  const { data } = await apiClient.get('/reports/daily-tagging', { params });
+  return data;
+}
+
 export async function downloadReportCsv(type, params = {}) {
   const token = localStorage.getItem('rfid_auth_token');
   const query = new URLSearchParams(params).toString();

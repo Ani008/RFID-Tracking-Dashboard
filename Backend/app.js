@@ -9,6 +9,9 @@ import movementRoutes from './routes/movementRoutes.js';
 import fileRoutes from './routes/fileRoutes.js';
 import gateRoutes from './routes/gateRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
+import publicRoutes from './routes/publicRoutes.js';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yamljs';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 export function createApp() {
@@ -40,6 +43,8 @@ export function createApp() {
   app.use('/api/files', fileRoutes);
   app.use('/api/gates', gateRoutes);
   app.use('/api/reports', reportRoutes);
+  app.use('/api/public', publicRoutes);
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(YAML.load('./docs/openapi.yaml')));
 
   return app;
 }

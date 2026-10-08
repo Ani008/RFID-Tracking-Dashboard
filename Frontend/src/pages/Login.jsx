@@ -182,7 +182,7 @@ export default function Login() {
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                CALYONIX INFOTECH
+                CALYONIX INFOTECH & ACME DIGITEK
               </a>
             </div>
           </div>

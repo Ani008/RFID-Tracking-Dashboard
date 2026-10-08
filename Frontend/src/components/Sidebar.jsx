@@ -125,7 +125,7 @@ export default function Sidebar() {
             target="_blank"
             rel="noopener noreferrer"
           >
-            CALYONIX INFOTECH
+            CALYONIX INFOTECH & ACME DIGITEK
           </a>
         </span>
       </div>

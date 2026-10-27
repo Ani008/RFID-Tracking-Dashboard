@@ -57,8 +57,11 @@ export async function downloadReportCsv(type, params = {}) {
   const downloadUrl = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = downloadUrl;
+  const contentDisp = response.headers.get('content-disposition') || '';
+  const match = contentDisp.match(/filename="?([^"]+)"?/);
   const dateStr = new Date().toISOString().slice(0, 10);
-  a.download = `report_${type}_${dateStr}.csv`;
+  const ext = params.format === 'xlsx' || params.format === 'excel' ? 'xlsx' : 'csv';
+  a.download = match ? match[1] : `report_${type}_${dateStr}.${ext}`;
   document.body.appendChild(a);
   a.click();
   a.remove();

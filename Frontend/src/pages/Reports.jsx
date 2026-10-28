@@ -60,6 +60,23 @@ function formatDayLabel(dateStr) {
 
 const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
 
+const DAILY_PAGE_SIZES = [20, 50, 100];
+
+// Page numbers to render, e.g. [1, 'gap-1', 4, 5, 6, 'gap-2', 20]. Strings are "…" gaps.
+function getPageNumbers(current, total) {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set([1, total, current - 1, current, current + 1]);
+  if (current <= 3) [2, 3, 4].forEach((p) => pages.add(p));
+  if (current >= total - 2) [total - 1, total - 2, total - 3].forEach((p) => pages.add(p));
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const out = [];
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - sorted[i - 1] > 1) out.push(`gap-${i}`);
+    out.push(p);
+  });
+  return out;
+}
+
 export default function Reports() {
   const [activeTab, setActiveTab] = useState('court-room-files');
   const [datePreset, setDatePreset] = useState('all'); // 'today' | '7d' | '30d' | 'all' | 'custom'
@@ -72,6 +89,7 @@ export default function Reports() {
   const [page, setPage] = useState(1);
   const [dailySelectedDay, setDailySelectedDay] = useState('');
   const [dailyViewMode, setDailyViewMode] = useState('files'); // 'files' | 'summary'
+  const [dailyPageSize, setDailyPageSize] = useState(DAILY_PAGE_SIZES[0]);
 
   // Data states
   const [reportData, setReportData] = useState(null);
@@ -135,7 +153,7 @@ export default function Reports() {
         setReportData(res);
       } else if (activeTab === 'daily-report') {
         // Daily report works on plain calendar days in the user's own time zone with pagination
-        const dailyParams = { tz: BROWSER_TIME_ZONE, page, limit: 20 };
+        const dailyParams = { tz: BROWSER_TIME_ZONE, page, limit: dailyPageSize };
         if (fromDate) dailyParams.from = fromDate;
         if (toDate) dailyParams.to = toDate;
         if (dailySelectedDay) dailyParams.day = dailySelectedDay;
@@ -148,7 +166,7 @@ export default function Reports() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, fromDate, toDate, gateFilter, directionFilter, caseSearch, thresholdHours, page, dailySelectedDay]);
+  }, [activeTab, fromDate, toDate, gateFilter, directionFilter, caseSearch, thresholdHours, page, dailySelectedDay, dailyPageSize]);
 
   useEffect(() => {
     loadReport();
@@ -287,6 +305,8 @@ export default function Reports() {
                   onChange={(e) => {
                     setDatePreset('custom');
                     setFromDate(e.target.value);
+                    setPage(1);
+                    setDailySelectedDay('');
                   }}
                   title="From Date"
                 />
@@ -298,6 +318,8 @@ export default function Reports() {
                   onChange={(e) => {
                     setDatePreset('custom');
                     setToDate(e.target.value);
+                    setPage(1);
+                    setDailySelectedDay('');
                   }}
                   title="To Date"
                 />
@@ -853,31 +875,73 @@ export default function Reports() {
                     </tbody>
                   </table>
 
-                  {daily?.files?.totalPages > 1 && (
-                    <div className="report-pagination">
-                      <span>
-                        Showing page {daily.files.page} of {daily.files.totalPages} ({daily.files.total} files)
-                      </span>
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <button
-                          className="btn-action"
-                          onClick={() => setPage((p) => Math.max(1, p - 1))}
-                          disabled={daily.files.page <= 1}
-                        >
-                          <ChevronLeft size={15} />
-                          <span>Previous</span>
-                        </button>
-                        <button
-                          className="btn-action"
-                          onClick={() => setPage((p) => Math.min(daily.files.totalPages, p + 1))}
-                          disabled={daily.files.page >= daily.files.totalPages}
-                        >
-                          <span>Next</span>
-                          <ChevronRight size={15} />
-                        </button>
+                  {/* Always visible (even for a single page) so users can see totals and change page size */}
+                  {daily?.files && (() => {
+                    const { total, page: curPage, limit: curLimit, totalPages, items: pageItems } = daily.files;
+                    const startNo = total === 0 ? 0 : (curPage - 1) * curLimit + 1;
+                    const endNo = total === 0 ? 0 : startNo + pageItems.length - 1;
+                    return (
+                      <div className="report-pagination daily-pagination">
+                        <span>
+                          {total === 0 ? 'No files' : `Showing ${startNo}–${endNo} of ${total} ${total === 1 ? 'file' : 'files'}`}
+                        </span>
+
+                        <div className="daily-pagination-controls">
+                          <label className="daily-page-size">
+                            <span>Rows per page</span>
+                            <select
+                              className="report-date-input"
+                              value={dailyPageSize}
+                              onChange={(e) => {
+                                setDailyPageSize(Number(e.target.value));
+                                setPage(1);
+                              }}
+                            >
+                              {DAILY_PAGE_SIZES.map((n) => (
+                                <option key={n} value={n}>{n}</option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <div className="daily-page-buttons">
+                            <button
+                              className="btn-action"
+                              onClick={() => setPage((p) => Math.max(1, p - 1))}
+                              disabled={curPage <= 1 || loading}
+                            >
+                              <ChevronLeft size={15} />
+                              <span>Previous</span>
+                            </button>
+
+                            {getPageNumbers(curPage, totalPages).map((p) =>
+                              typeof p === 'string' ? (
+                                <span key={p} className="daily-page-gap">…</span>
+                              ) : (
+                                <button
+                                  key={p}
+                                  className={`daily-page-num ${p === curPage ? 'active' : ''}`}
+                                  onClick={() => setPage(p)}
+                                  disabled={loading}
+                                  aria-current={p === curPage ? 'page' : undefined}
+                                >
+                                  {p}
+                                </button>
+                              )
+                            )}
+
+                            <button
+                              className="btn-action"
+                              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                              disabled={curPage >= totalPages || loading}
+                            >
+                              <span>Next</span>
+                              <ChevronRight size={15} />
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </>
               ) : (
                 <>

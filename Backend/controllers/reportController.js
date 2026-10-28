@@ -178,6 +178,23 @@ async function aggregateDailyTagging({ tz, fromDay, toDay }) {
   });
 }
 
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// 'YYYY-MM-DD' -> '24-Oct-2026' (text, for CSV)
+function formatDayForExport(dayStr) {
+  if (!dayStr || !DAY_RE.test(dayStr)) return '';
+  const [y, m, d] = dayStr.split('-');
+  return `${d}-${MONTH_ABBR[Number(m) - 1]}-${y}`;
+}
+
+// 'YYYY-MM-DD' -> Excel date serial number (days since 1899-12-30).
+// Pure calendar maths on UTC, so the server's time zone can never shift the day.
+function excelSerialFromDay(dayStr) {
+  if (!dayStr || !DAY_RE.test(dayStr)) return '';
+  const [y, m, d] = dayStr.split('-').map(Number);
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / MS_PER_DAY);
+}
+
 export async function getDailyEditedFiles({ from, to, tz, day, page = 1, limit = 25 }) {
   const timeZone = resolveTimeZone(tz);
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -612,16 +629,27 @@ export async function exportReportCsv(req, res, next) {
         throw err;
       }
 
-      const headers = ['File Name', 'RFID Tag'];
+      const format = String(req.query.format || '').toLowerCase();
+      const isXlsx = format === 'xlsx' || format === 'excel';
+
+      // Date comes first. In .xlsx it is a real Excel date (sortable / filterable),
+      // in .csv it is text like "24-Oct-2026", which Excel also recognises as a date.
+      const headers = ['Date', 'File Name', 'RFID Tag'];
       const rows = filesResult.items.map((f) => [
+        isXlsx ? excelSerialFromDay(f.day) : formatDayForExport(f.day),
         f.fileName || '',
         f.rfidTag || '',
       ]);
 
-      const format = String(req.query.format || '').toLowerCase();
-      if (format === 'xlsx' || format === 'excel') {
+      if (isXlsx) {
         const wsData = [headers, ...rows];
         const ws = XLSX.utils.aoa_to_sheet(wsData);
+        // Show the date column as dd-mmm-yyyy and give the columns a readable width
+        for (let r = 1; r < wsData.length; r += 1) {
+          const cell = ws[XLSX.utils.encode_cell({ r, c: 0 })];
+          if (cell && cell.t === 'n') cell.z = 'dd-mmm-yyyy';
+        }
+        ws['!cols'] = [{ wch: 14 }, { wch: 60 }, { wch: 28 }];
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Daily Edited Files');
         const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

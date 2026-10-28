@@ -275,3 +275,62 @@
   color: var(--accent-600);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
+
+/* Daily files list pagination */
+.daily-pagination {
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.daily-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.daily-page-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.daily-page-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.daily-page-num {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.daily-page-num:hover:not(:disabled):not(.active) {
+  background: var(--bg);
+}
+
+.daily-page-num.active {
+  background: var(--accent-600);
+  border-color: var(--accent-600);
+  color: #ffffff;
+}
+
+.daily-page-num:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.daily-page-gap {
+  padding: 0 0.15rem;
+  color: var(--text-muted);
+}

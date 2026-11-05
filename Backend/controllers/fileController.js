@@ -35,55 +35,218 @@ function validateFilePayload(body, { partial = false } = {}) {
   return errors;
 }
 
-// GET /api/files?location=&caseId=&search=&page=&limit=
-// Pagination is opt-in: pass `page` to get a paginated response. Callers that
-// don't pass `page` (e.g. Dashboard, which needs every file for its counts)
-// keep getting the full matching set, unchanged.
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// GET /api/files/case-types
+export async function getCaseTypes(req, res, next) {
+  try {
+    const rawTypes = await File.distinct('caseType', {
+      caseType: { $exists: true, $ne: '' },
+      archived: { $ne: true },
+    });
+    const sorted = rawTypes
+      .filter((t) => typeof t === 'string' && t.trim().length > 0)
+      .map((t) => t.trim().toUpperCase())
+      .filter((val, idx, arr) => arr.indexOf(val) === idx)
+      .sort();
+    res.json(sorted);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/files/pending-mapping
+export async function listPendingMappingFiles(req, res, next) {
+  req.query.mapped = 'false';
+  return listFiles(req, res, next);
+}
+
+// GET /api/files?mapped=&status=&caseType=&q=&page=&limit=&sort=
 export async function listFiles(req, res, next) {
   try {
-    const { location, caseId, search } = req.query;
     const filter = { archived: { $ne: true } };
+    const andConditions = [];
 
-    if (location) {
-      if (!VALID_LOCATIONS.includes(location)) {
+    // 1. location (existing parameter)
+    if (req.query.location !== undefined) {
+      if (typeof req.query.location !== 'string' || !VALID_LOCATIONS.includes(req.query.location)) {
         return res.status(400).json({ error: `location must be one of ${VALID_LOCATIONS.join(', ')}` });
       }
-      filter.currentLocation = location;
+      andConditions.push({ currentLocation: req.query.location });
     }
-    if (caseId) filter.caseId = caseId;
-    if (search) {
-      const re = new RegExp(search, 'i');
-      const normalizedSearch = normalizeRfidTag(search);
-      filter.$or = [
-        { fileId: re },
-        { fileName: re },
-        { caseId: re },
-        { caseName: re },
-        { rfidTag: re },
-        ...(normalizedSearch ? [{ rfidTag: normalizedSearch }] : []),
-      ];
+
+    // 2. caseId (existing parameter)
+    if (req.query.caseId !== undefined) {
+      if (typeof req.query.caseId !== 'string') {
+        return res.status(400).json({ error: 'caseId must be a string' });
+      }
+      andConditions.push({ caseId: req.query.caseId.trim() });
+    }
+
+    // 3. mapped = true | false
+    if (req.query.mapped !== undefined) {
+      if (typeof req.query.mapped !== 'string') {
+        return res.status(400).json({ error: 'mapped must be "true" or "false"' });
+      }
+      const m = req.query.mapped.trim().toLowerCase();
+      if (m !== 'true' && m !== 'false') {
+        return res.status(400).json({ error: 'mapped must be "true" or "false"' });
+      }
+      if (m === 'true') {
+        andConditions.push({ rfidTag: { $exists: true, $type: 'string', $gt: '' } });
+      } else {
+        andConditions.push({
+          $or: [{ rfidTag: { $exists: false } }, { rfidTag: null }, { rfidTag: '' }],
+        });
+      }
+    }
+
+    // 4. status = ALL | PENDING | DISPOSED
+    if (req.query.status !== undefined) {
+      if (typeof req.query.status !== 'string') {
+        return res.status(400).json({ error: 'status must be a string' });
+      }
+      const s = req.query.status.trim().toUpperCase();
+      if (!['ALL', 'PENDING', 'DISPOSED'].includes(s)) {
+        return res.status(400).json({ error: 'status must be one of ALL, PENDING, DISPOSED' });
+      }
+      if (s !== 'ALL') {
+        andConditions.push({ caseStatus: s });
+      }
+    }
+
+    // 5. caseType = ALL | <value> (must exist in DB)
+    if (req.query.caseType !== undefined) {
+      if (typeof req.query.caseType !== 'string') {
+        return res.status(400).json({ error: 'caseType must be a string' });
+      }
+      const ct = req.query.caseType.trim().toUpperCase();
+      if (ct && ct !== 'ALL') {
+        const distinctTypes = await File.distinct('caseType', {
+          caseType: { $exists: true, $ne: '' },
+          archived: { $ne: true },
+        });
+        const existingUpper = distinctTypes.map((t) => String(t).trim().toUpperCase());
+        if (!existingUpper.includes(ct)) {
+          return res.status(400).json({
+            error: `caseType "${ct}" not found in database. Must be one of configured case types or ALL.`,
+          });
+        }
+        andConditions.push({ caseType: ct });
+      }
+    }
+
+    // 6. q = text; case-insensitive contains match on caseNumber OR cino OR fileNumber
+    if (req.query.q !== undefined) {
+      if (typeof req.query.q !== 'string') {
+        return res.status(400).json({ error: 'q must be a string' });
+      }
+      const rawQ = req.query.q.trim().slice(0, 50);
+      if (rawQ.length > 0) {
+        const re = new RegExp(escapeRegex(rawQ), 'i');
+        andConditions.push({
+          $or: [{ caseNumber: re }, { cino: re }, { fileNumber: re }],
+        });
+      }
+    }
+
+    // 7. search (existing search across fileId, fileName, caseId, caseName, rfidTag)
+    if (req.query.search !== undefined) {
+      if (typeof req.query.search !== 'string') {
+        return res.status(400).json({ error: 'search must be a string' });
+      }
+      const trimmedSearch = req.query.search.trim().slice(0, 100);
+      if (trimmedSearch.length > 0) {
+        const re = new RegExp(escapeRegex(trimmedSearch), 'i');
+        const normalizedSearch = normalizeRfidTag(trimmedSearch);
+        andConditions.push({
+          $or: [
+            { fileId: re },
+            { fileName: re },
+            { caseId: re },
+            { caseName: re },
+            { rfidTag: re },
+            ...(normalizedSearch ? [{ rfidTag: normalizedSearch }] : []),
+          ],
+        });
+      }
+    }
+
+    if (andConditions.length > 0) {
+      filter.$and = andConditions;
+    }
+
+    // Sort: whitelist createdAt, caseNumber, updatedAt
+    let sortOption = { createdAt: -1, _id: -1 };
+    if (req.query.sort !== undefined) {
+      if (typeof req.query.sort !== 'string') {
+        return res.status(400).json({ error: 'sort must be a string' });
+      }
+      const sortKey = req.query.sort.trim();
+      const ALLOWED_SORTS = {
+        createdAt: { createdAt: 1, _id: 1 },
+        '-createdAt': { createdAt: -1, _id: -1 },
+        caseNumber: { caseNumber: 1, _id: 1 },
+        '-caseNumber': { caseNumber: -1, _id: -1 },
+        updatedAt: { updatedAt: 1, _id: 1 },
+        '-updatedAt': { updatedAt: -1, _id: -1 },
+      };
+      if (!ALLOWED_SORTS[sortKey]) {
+        return res.status(400).json({
+          error: `Invalid sort "${sortKey}". Whitelisted fields: createdAt, caseNumber`,
+        });
+      }
+      sortOption = ALLOWED_SORTS[sortKey];
     }
 
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
 
-    const isPaginated = req.query.page !== undefined;
-    if (!isPaginated) {
-      const files = await File.find(filter).sort({ updatedAt: -1 });
-      return res.json({ items: files, total: files.length });
+    // Backward compatibility: If no params provided at all, return full set unpaginated
+    const hasFilterOrPaging =
+      req.query.page !== undefined ||
+      req.query.limit !== undefined ||
+      req.query.mapped !== undefined ||
+      req.query.status !== undefined ||
+      req.query.caseType !== undefined ||
+      req.query.q !== undefined ||
+      req.query.sort !== undefined ||
+      req.query.location !== undefined ||
+      req.query.caseId !== undefined ||
+      req.query.search !== undefined;
+
+    if (!hasFilterOrPaging) {
+      const files = await File.find(filter).sort(sortOption);
+      return res.json({ items: files, total: files.length, page: 1, limit: files.length });
+    }
+
+    // Page & Limit validation (limit default 20, max 100)
+    if (req.query.page !== undefined && isNaN(Number(req.query.page))) {
+      return res.status(400).json({ error: 'page must be a valid number' });
+    }
+    if (req.query.limit !== undefined && isNaN(Number(req.query.limit))) {
+      return res.status(400).json({ error: 'limit must be a valid number' });
     }
 
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
 
     const [files, total] = await Promise.all([
       File.find(filter)
-        .sort({ updatedAt: -1 })
+        .sort(sortOption)
         .skip((page - 1) * limit)
         .limit(limit),
       File.countDocuments(filter),
     ]);
 
-    res.json({ items: files, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) });
+    res.json({
+      items: files,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
   } catch (err) {
     next(err);
   }

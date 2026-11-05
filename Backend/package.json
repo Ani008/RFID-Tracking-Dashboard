@@ -8,6 +8,8 @@
     "dev": "node --watch server.js",
     "seed": "node scripts/seed.js",
     "migrate:phase1": "node scripts/migrate-phase1.js",
+    "test:phase1": "node scripts/test_phase1.js",
+    "test:phase2": "node scripts/test_phase2.js",
     "test:security": "node scripts/security_test.js",
     "test:e2e": "node scripts/e2e_full_test.js"
   },

@@ -7,6 +7,8 @@ import {
   updateFile,
   deleteFile,
   bulkUploadFiles,
+  getCaseTypes,
+  listPendingMappingFiles,
 } from '../controllers/fileController.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 
@@ -32,6 +34,8 @@ const upload = multer({
 router.use(requireAuth);
 
 router.get('/', listFiles);
+router.get('/case-types', getCaseTypes);
+router.get('/pending-mapping', listPendingMappingFiles);
 router.get('/:fileId', getFile);
 
 // Admin-only file management actions

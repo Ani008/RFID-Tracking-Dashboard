@@ -21,7 +21,7 @@ export function createApp() {
   app.use(helmet());
 
   // Strict CORS policy
-  const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173';
+  const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173' || 'http://10.192.0.126:4000';
   app.use(
     cors({
       origin: allowedOrigin,

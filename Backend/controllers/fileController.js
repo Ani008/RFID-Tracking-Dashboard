@@ -5,6 +5,7 @@ import AuditLog from '../models/AuditLog.js';
 import { normalizeRfidTag } from '../utils/rfidHelper.js';
 
 const VALID_LOCATIONS = ['SHELF_ROOM', 'COURT_ROOM', 'IN_TRANSIT'];
+const VALID_CASE_STATUSES = ['PENDING', 'DISPOSED'];
 
 function validateFilePayload(body, { partial = false } = {}) {
   const errors = [];
@@ -21,6 +22,13 @@ function validateFilePayload(body, { partial = false } = {}) {
       if (field in body && (!body[field] || typeof body[field] !== 'string' || !body[field].trim())) {
         errors.push(`${field} cannot be empty`);
       }
+    }
+  }
+
+  if (body.caseStatus) {
+    const statusUpper = String(body.caseStatus).trim().toUpperCase();
+    if (!VALID_CASE_STATUSES.includes(statusUpper)) {
+      errors.push(`caseStatus must be one of ${VALID_CASE_STATUSES.join(', ')}`);
     }
   }
 
@@ -87,19 +95,43 @@ export async function createFile(req, res, next) {
     const errors = validateFilePayload(req.body);
     if (errors.length > 0) return res.status(400).json({ errors });
 
-    const { fileId, fileName, caseId, caseName, rfidTag, currentLocation } = req.body;
-    const normalizedTag = rfidTag ? normalizeRfidTag(rfidTag) : undefined;
+    const {
+      fileId,
+      fileName,
+      caseId,
+      caseName,
+      rfidTag,
+      currentLocation,
+      caseNumber,
+      cino,
+      fileNumber,
+      caseType,
+      caseStatus,
+      rackLocation,
+    } = req.body;
 
-    const existing = await File.findOne({
-      $or: [{ fileId: fileId.trim() }, ...(normalizedTag ? [{ rfidTag: normalizedTag }] : [])],
-    });
+    const normalizedTag = rfidTag ? normalizeRfidTag(rfidTag) : undefined;
+    const normalizedCino = cino && typeof cino === 'string' && cino.trim() ? cino.trim().toUpperCase() : undefined;
+
+    const orConditions = [{ fileId: fileId.trim() }];
+    if (normalizedTag) orConditions.push({ rfidTag: normalizedTag });
+    if (normalizedCino) orConditions.push({ cino: normalizedCino });
+
+    const existing = await File.findOne({ $or: orConditions });
     if (existing) {
-      return res.status(409).json({
-        error:
-          existing.fileId === fileId.trim()
-            ? `File ID "${fileId}" already exists`
-            : `RFID tag "${normalizedTag}" is already paired with file ${existing.fileId}`,
-      });
+      if (existing.fileId === fileId.trim()) {
+        return res.status(409).json({ error: `File ID "${fileId}" already exists` });
+      }
+      if (normalizedTag && existing.rfidTag === normalizedTag) {
+        return res.status(409).json({
+          error: `RFID tag "${normalizedTag}" is already paired with file ${existing.fileId}`,
+        });
+      }
+      if (normalizedCino && existing.cino === normalizedCino) {
+        return res.status(409).json({
+          error: `CINO "${normalizedCino}" is already registered with file ${existing.fileId}`,
+        });
+      }
     }
 
     const file = await File.create({
@@ -108,6 +140,21 @@ export async function createFile(req, res, next) {
       caseId: caseId.trim(),
       caseName: caseName ? caseName.trim() : '',
       ...(normalizedTag ? { rfidTag: normalizedTag } : {}),
+      ...(normalizedCino ? { cino: normalizedCino } : {}),
+      ...(caseNumber ? { caseNumber: String(caseNumber).trim() } : {}),
+      ...(fileNumber ? { fileNumber: String(fileNumber).trim() } : {}),
+      ...(caseType ? { caseType: String(caseType).trim().toUpperCase() } : {}),
+      caseStatus: caseStatus ? String(caseStatus).trim().toUpperCase() : 'PENDING',
+      ...(rackLocation && typeof rackLocation === 'object'
+        ? {
+            rackLocation: {
+              rack: rackLocation.rack ? String(rackLocation.rack).trim() : '',
+              shelf: rackLocation.shelf ? String(rackLocation.shelf).trim() : '',
+              updatedAt: new Date(),
+              updatedBy: req.user?._id,
+            },
+          }
+        : {}),
       currentLocation: currentLocation || 'SHELF_ROOM',
     });
 
@@ -123,6 +170,12 @@ export async function createFile(req, res, next) {
         caseId: file.caseId,
         caseName: file.caseName,
         rfidTag: file.rfidTag,
+        caseNumber: file.caseNumber,
+        cino: file.cino,
+        fileNumber: file.fileNumber,
+        caseType: file.caseType,
+        caseStatus: file.caseStatus,
+        rackLocation: file.rackLocation,
         currentLocation: file.currentLocation,
       },
     });
@@ -148,6 +201,17 @@ const HEADER_ALIASES = {
   rfidtag: 'rfidTag',
   rfid: 'rfidTag',
   epc: 'rfidTag',
+  casenumber: 'caseNumber',
+  caseno: 'caseNumber',
+  cino: 'cino',
+  filenumber: 'fileNumber',
+  fileno: 'fileNumber',
+  casetype: 'caseType',
+  type: 'caseType',
+  casestatus: 'caseStatus',
+  status: 'caseStatus',
+  rack: 'rack',
+  shelf: 'shelf',
 };
 
 function mapRow(rawRow) {
@@ -191,6 +255,7 @@ export async function bulkUploadFiles(req, res, next) {
     const errors = [];
     const seenFileIds = new Set();
     const seenRfidTags = new Set();
+    const seenCinos = new Set();
     const candidates = [];
 
     rawRows.forEach((rawRow, idx) => {
@@ -202,6 +267,16 @@ export async function bulkUploadFiles(req, res, next) {
       const fileName = row.fileName ? String(row.fileName).trim() : '';
       const caseName = row.caseName ? String(row.caseName).trim() : '';
       const rfidTag = row.rfidTag ? normalizeRfidTag(row.rfidTag) : '';
+      const cino = row.cino ? String(row.cino).trim().toUpperCase() : '';
+      const caseNumber = row.caseNumber ? String(row.caseNumber).trim() : '';
+      const fileNumber = row.fileNumber ? String(row.fileNumber).trim() : '';
+      const caseType = row.caseType ? String(row.caseType).trim().toUpperCase() : '';
+      const caseStatus =
+        row.caseStatus && VALID_CASE_STATUSES.includes(String(row.caseStatus).trim().toUpperCase())
+          ? String(row.caseStatus).trim().toUpperCase()
+          : 'PENDING';
+      const rack = row.rack ? String(row.rack).trim() : '';
+      const shelf = row.shelf ? String(row.shelf).trim() : '';
 
       if (!fileId || !caseId || !fileName) {
         errors.push({ row: rowNum, fileId: fileId || null, reason: 'Missing FileId, CaseId, or FileName' });
@@ -215,9 +290,14 @@ export async function bulkUploadFiles(req, res, next) {
         errors.push({ row: rowNum, fileId, reason: 'Duplicate RFID tag within uploaded sheet' });
         return;
       }
+      if (cino && seenCinos.has(cino)) {
+        errors.push({ row: rowNum, fileId, reason: 'Duplicate CINO within uploaded sheet' });
+        return;
+      }
 
       seenFileIds.add(fileId);
       if (rfidTag) seenRfidTags.add(rfidTag);
+      if (cino) seenCinos.add(cino);
 
       candidates.push({
         rowNum,
@@ -227,6 +307,12 @@ export async function bulkUploadFiles(req, res, next) {
           fileName,
           caseName,
           ...(rfidTag ? { rfidTag } : {}),
+          ...(cino ? { cino } : {}),
+          ...(caseNumber ? { caseNumber } : {}),
+          ...(fileNumber ? { fileNumber } : {}),
+          ...(caseType ? { caseType } : {}),
+          caseStatus,
+          ...(rack || shelf ? { rackLocation: { rack, shelf, updatedAt: new Date(), updatedBy: req.user?._id } } : {}),
           currentLocation: 'SHELF_ROOM',
         },
       });
@@ -234,13 +320,19 @@ export async function bulkUploadFiles(req, res, next) {
 
     const candidateFileIds = candidates.map((c) => c.doc.fileId);
     const candidateTags = candidates.filter((c) => c.doc.rfidTag).map((c) => c.doc.rfidTag);
+    const candidateCinos = candidates.filter((c) => c.doc.cino).map((c) => c.doc.cino);
+
+    const existingConditions = [{ fileId: { $in: candidateFileIds } }];
+    if (candidateTags.length > 0) existingConditions.push({ rfidTag: { $in: candidateTags } });
+    if (candidateCinos.length > 0) existingConditions.push({ cino: { $in: candidateCinos } });
 
     const existing = await File.find(
-      { $or: [{ fileId: { $in: candidateFileIds } }, ...(candidateTags.length ? [{ rfidTag: { $in: candidateTags } }] : [])] },
-      { fileId: 1, rfidTag: 1 }
+      { $or: existingConditions },
+      { fileId: 1, rfidTag: 1, cino: 1 }
     );
     const existingFileIds = new Set(existing.map((f) => f.fileId));
     const existingTags = new Set(existing.map((f) => f.rfidTag).filter(Boolean));
+    const existingCinos = new Set(existing.map((f) => f.cino).filter(Boolean));
 
     const toInsert = [];
     for (const { rowNum, doc } of candidates) {
@@ -250,6 +342,10 @@ export async function bulkUploadFiles(req, res, next) {
       }
       if (doc.rfidTag && existingTags.has(doc.rfidTag)) {
         errors.push({ row: rowNum, fileId: doc.fileId, reason: `RFID tag already paired with another file` });
+        continue;
+      }
+      if (doc.cino && existingCinos.has(doc.cino)) {
+        errors.push({ row: rowNum, fileId: doc.fileId, reason: `CINO already registered with another file` });
         continue;
       }
       toInsert.push(doc);
@@ -349,6 +445,10 @@ export async function updateFile(req, res, next) {
     }
 
     const trimmedNewTag = req.body.rfidTag ? normalizeRfidTag(req.body.rfidTag) : undefined;
+    const trimmedNewCino =
+      req.body.cino && typeof req.body.cino === 'string' && req.body.cino.trim()
+        ? req.body.cino.trim().toUpperCase()
+        : undefined;
 
     if (req.body.rfidTag && !trimmedNewTag) {
       return res.status(400).json({ error: 'rfidTag must contain hexadecimal characters (0-9, A-F)' });
@@ -366,9 +466,31 @@ export async function updateFile(req, res, next) {
       }
     }
 
+    if (trimmedNewCino && trimmedNewCino !== file.cino) {
+      const conflict = await File.findOne({
+        cino: trimmedNewCino,
+        _id: { $ne: file._id },
+      });
+      if (conflict) {
+        return res.status(409).json({
+          error: `CINO "${trimmedNewCino}" is already registered with file ${conflict.fileId}`,
+        });
+      }
+    }
+
     const before = {};
     const after = {};
-    const editableFields = ['fileName', 'caseId', 'caseName', 'rfidTag'];
+    const editableFields = [
+      'fileName',
+      'caseId',
+      'caseName',
+      'rfidTag',
+      'caseNumber',
+      'cino',
+      'fileNumber',
+      'caseType',
+      'caseStatus',
+    ];
     let hasTagChange = false;
 
     for (const field of editableFields) {
@@ -377,6 +499,10 @@ export async function updateFile(req, res, next) {
       if (field in req.body) {
         let newVal = typeof req.body[field] === 'string' ? req.body[field].trim() : req.body[field];
         if (field === 'rfidTag') newVal = normalizeRfidTag(newVal);
+        if (field === 'cino' && typeof newVal === 'string') newVal = newVal.toUpperCase();
+        if (field === 'caseType' && typeof newVal === 'string') newVal = newVal.toUpperCase();
+        if (field === 'caseStatus' && typeof newVal === 'string') newVal = newVal.toUpperCase();
+
         if (newVal !== file[field]) {
           before[field] = file[field];
           after[field] = newVal;
@@ -387,6 +513,20 @@ export async function updateFile(req, res, next) {
           }
         }
       }
+    }
+
+    if ('rackLocation' in req.body && req.body.rackLocation && typeof req.body.rackLocation === 'object') {
+      const r = req.body.rackLocation;
+      const newRackLoc = {
+        rack: r.rack ? String(r.rack).trim() : '',
+        shelf: r.shelf ? String(r.shelf).trim() : '',
+        updatedAt: new Date(),
+        updatedBy: req.user?._id,
+      };
+      const oldRackLoc = file.rackLocation ? { ...file.rackLocation.toObject?.() || file.rackLocation } : null;
+      before.rackLocation = oldRackLoc;
+      after.rackLocation = newRackLoc;
+      file.rackLocation = newRackLoc;
     }
 
     if (Object.keys(after).length > 0) {

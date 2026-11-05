@@ -164,7 +164,7 @@ async function runFullTestSuite() {
   assert(editRes.status === 200 && editRes.data.fileName.includes('Revised Title'), 'Admin successfully edited file metadata');
 
   // Reassign RFID Tag
-  const newEpc = `E28068NEW${Math.floor(Math.random() * 100000000)}`;
+  const newEpc = `E28068EA${Math.floor(Math.random() * 100000000)}`;
   const tagReassignRes = await request(`/files/${testFileId}`, {
     method: 'PUT',
     headers: { Authorization: `Bearer ${adminToken}` },

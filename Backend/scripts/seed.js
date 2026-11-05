@@ -37,11 +37,92 @@ async function seed() {
   console.log(`  - admin (password: ${adminPassword})`);
   console.log(`  - staff (password: ${staffPassword})`);
 
-  // Files are no longer seeded here — register files via the app's manual
-  // form or the bulk Excel upload instead. We still clear any stale demo
-  // files left over from earlier runs so you start with a clean slate.
+  // Files seeded with mixed statuses, types, tags, and rack locations
   await File.deleteMany({});
-  console.log('[seed] cleared existing files (no demo files inserted)');
+  await File.syncIndexes();
+
+  const demoFiles = [
+    {
+      fileId: 'AHC-F-1001',
+      fileNumber: '1001/2024',
+      fileName: 'State of U.P. vs. Ramesh Kumar',
+      caseId: 'CASE-2024-001',
+      caseNumber: 'BAIL/2024/001',
+      cino: 'UPHC010000012024',
+      caseType: 'BAIL',
+      caseStatus: 'PENDING',
+      rfidTag: 'E2806894000040178F2A9001',
+      currentLocation: 'SHELF_ROOM',
+      rackLocation: { rack: 'RACK-01', shelf: 'SHELF-A', updatedAt: new Date() },
+    },
+    {
+      fileId: 'AHC-F-1002',
+      fileNumber: '1002/2024',
+      fileName: 'M/S ABC Logistics vs. Commissioner of Commercial Tax',
+      caseId: 'CASE-2024-002',
+      caseNumber: 'WTAX/2024/045',
+      cino: 'UPHC010000022024',
+      caseType: 'WTAX',
+      caseStatus: 'PENDING',
+      rfidTag: 'E2806894000040178F2A9002',
+      currentLocation: 'SHELF_ROOM',
+      rackLocation: { rack: 'RACK-01', shelf: 'SHELF-B', updatedAt: new Date() },
+    },
+    {
+      fileId: 'AHC-F-1003',
+      fileNumber: '1003/2024',
+      fileName: 'Pooja Sharma vs. Anand Sharma',
+      caseId: 'CASE-2024-003',
+      caseNumber: 'MATR/2024/112',
+      cino: 'UPHC010000032024',
+      caseType: 'CIVIL',
+      caseStatus: 'DISPOSED',
+      rfidTag: 'E2806894000040178F2A9003',
+      currentLocation: 'SHELF_ROOM',
+      rackLocation: { rack: 'RACK-02', shelf: 'SHELF-C', updatedAt: new Date() },
+    },
+    {
+      fileId: 'AHC-F-1004',
+      fileNumber: '1004/2024',
+      fileName: 'Vikas Dubey vs. State of U.P.',
+      caseId: 'CASE-2024-004',
+      caseNumber: 'BAIL/2024/099',
+      cino: 'UPHC010000042024',
+      caseType: 'BAIL',
+      caseStatus: 'PENDING',
+      // Untagged (pending RFID mapping)
+      currentLocation: 'SHELF_ROOM',
+      rackLocation: { rack: 'RACK-03', shelf: 'SHELF-A', updatedAt: new Date() },
+    },
+    {
+      fileId: 'AHC-F-1005',
+      fileNumber: '1005/2024',
+      fileName: 'Northern Rail Enterprises vs. Union of India',
+      caseId: 'CASE-2024-005',
+      caseNumber: 'WRIT/2024/780',
+      cino: 'UPHC010000052024',
+      caseType: 'WRIT',
+      caseStatus: 'PENDING',
+      // Untagged and no rack yet
+      currentLocation: 'SHELF_ROOM',
+    },
+    {
+      fileId: 'AHC-F-1006',
+      fileNumber: '1006/2024',
+      fileName: 'XYZ Infra Pvt Ltd vs. State Tax Tribunal',
+      caseId: 'CASE-2024-006',
+      caseNumber: 'WTAX/2024/180',
+      cino: 'UPHC010000062024',
+      caseType: 'WTAX',
+      caseStatus: 'DISPOSED',
+      rfidTag: 'E2806894000040178F2A9006',
+      currentLocation: 'SHELF_ROOM',
+      rackLocation: { rack: 'RACK-02', shelf: 'SHELF-A', updatedAt: new Date() },
+    },
+  ];
+
+  await File.insertMany(demoFiles);
+  console.log(`[seed] inserted ${demoFiles.length} demo files (mixed types, statuses, mapped/unmapped, racks)`);
 
   await Gate.deleteMany({});
   await Gate.insertMany([

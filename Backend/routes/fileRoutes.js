@@ -7,6 +7,7 @@ import {
   updateFile,
   deleteFile,
   bulkUploadFiles,
+  lookupTags,
 } from '../controllers/fileController.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 
@@ -32,6 +33,8 @@ const upload = multer({
 router.use(requireAuth);
 
 router.get('/', listFiles);
+// Available to every authenticated role (admin + staff) — read-only
+router.post('/lookup-tags', lookupTags);
 router.get('/:fileId', getFile);
 
 // Admin-only file management actions

@@ -5,6 +5,7 @@ import {
   Scale,
   LayoutDashboard,
   FolderOpen,
+  ScanSearch,
   Tag,
   DoorOpen,
   Activity,
@@ -31,6 +32,7 @@ export default function Sidebar() {
       items: [
         { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
         { to: "/files", label: "Case Files", icon: FolderOpen },
+        { to: "/search", label: "Search", icon: ScanSearch },
         ...(isAdmin
           ? [{ to: "/register", label: "Register File", icon: Tag }]
           : []),

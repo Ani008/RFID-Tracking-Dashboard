@@ -27,6 +27,11 @@ function validateFilePayload(body, { partial = false } = {}) {
   return errors;
 }
 
+// Treat user-typed search text literally (so "(" or "*" can't throw or be abused)
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // GET /api/files?location=&caseId=&search=&page=&limit=
 // Pagination is opt-in: pass `page` to get a paginated response. Callers that
 // don't pass `page` (e.g. Dashboard, which needs every file for its counts)
@@ -44,7 +49,7 @@ export async function listFiles(req, res, next) {
     }
     if (caseId) filter.caseId = caseId;
     if (search) {
-      const re = new RegExp(search, 'i');
+      const re = new RegExp(escapeRegex(String(search)), 'i');
       const normalizedSearch = normalizeRfidTag(search);
       filter.$or = [
         { fileId: re },
@@ -76,6 +81,52 @@ export async function listFiles(req, res, next) {
     ]);
 
     res.json({ items: files, total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/files/lookup-tags   body: { tags: string[] }
+// Used by the Search screen (handheld reader). Each raw scan is normalized the
+// same way tags are normalized on registration, then matched against the DB.
+// Returns one entry per distinct normalized tag, in the order first seen:
+//   { tag, found: true, file } | { tag, found: false }
+const MAX_LOOKUP_TAGS = 200;
+
+export async function lookupTags(req, res, next) {
+  try {
+    const { tags } = req.body || {};
+    if (!Array.isArray(tags) || tags.length === 0) {
+      return res.status(400).json({ error: 'tags must be a non-empty array of RFID tag strings' });
+    }
+    if (tags.length > MAX_LOOKUP_TAGS) {
+      return res.status(400).json({ error: `A maximum of ${MAX_LOOKUP_TAGS} tags can be looked up at once` });
+    }
+
+    const normalized = [];
+    const seen = new Set();
+    for (const raw of tags) {
+      if (typeof raw !== 'string') continue;
+      const tag = normalizeRfidTag(raw);
+      if (tag && !seen.has(tag)) {
+        seen.add(tag);
+        normalized.push(tag);
+      }
+    }
+    if (normalized.length === 0) {
+      return res.status(400).json({ error: 'No valid hexadecimal RFID tags were provided' });
+    }
+
+    const files = await File.find({ rfidTag: { $in: normalized } });
+    const byTag = new Map(files.map((f) => [f.rfidTag, f]));
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      results: normalized.map((tag) => {
+        const file = byTag.get(tag);
+        return file ? { tag, found: true, file } : { tag, found: false };
+      }),
+    });
   } catch (err) {
     next(err);
   }

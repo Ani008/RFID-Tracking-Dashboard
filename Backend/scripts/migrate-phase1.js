@@ -60,3 +60,4 @@ migrate().catch((err) => {
   console.error('[migrate-phase1] Fatal migration error:', err);
   process.exit(1);
 });
+

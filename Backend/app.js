@@ -9,6 +9,7 @@ import movementRoutes from './routes/movementRoutes.js';
 import fileRoutes from './routes/fileRoutes.js';
 import gateRoutes from './routes/gateRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
+import causeListRoutes from './routes/causeListRoutes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -50,6 +51,7 @@ export function createApp() {
   app.use('/api/files', fileRoutes);
   app.use('/api/gates', gateRoutes);
   app.use('/api/reports', reportRoutes);
+  app.use('/api/causelist', causeListRoutes);
 
   return app;
 }

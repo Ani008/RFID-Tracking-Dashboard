@@ -1,8 +1,18 @@
 import apiClient from "./client.js";
 
-export async function fetchFiles(params = {}) {
-  const { data } = await apiClient.get("/files", { params });
-  return data; // { items, total }
+export async function fetchFiles(params = {}, signal) {
+  const { data } = await apiClient.get("/files", { params, signal });
+  return data; // { items, total, page, limit, totalPages }
+}
+
+export async function fetchCaseTypes(signal) {
+  const { data } = await apiClient.get("/files/case-types", { signal });
+  return data;
+}
+
+export async function fetchPendingMappingFiles(params = {}, signal) {
+  const { data } = await apiClient.get("/files/pending-mapping", { params, signal });
+  return data;
 }
 
 export async function fetchFile(fileId) {

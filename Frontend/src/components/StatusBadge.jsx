@@ -20,3 +20,20 @@ export function DirectionBadge({ direction }) {
   const style = DIRECTION_STYLES[direction] || { label: direction, tone: 'neutral' };
   return <span className={`status-badge tone-${style.tone}`}>{style.label}</span>;
 }
+
+export function MappedBadge({ mapped }) {
+  return (
+    <span className={`status-badge tone-${mapped ? 'green' : 'orange'}`}>
+      {mapped ? 'Mapped' : 'Pending'}
+    </span>
+  );
+}
+
+export function CaseStatusBadge({ status }) {
+  const isPending = status === 'PENDING';
+  return (
+    <span className={`status-badge tone-${isPending ? 'blue' : 'neutral'}`}>
+      {status || 'PENDING'}
+    </span>
+  );
+}

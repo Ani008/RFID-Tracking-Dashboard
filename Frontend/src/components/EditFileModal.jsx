@@ -10,6 +10,11 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
     fileName: '',
     caseId: '',
     rfidTag: '',
+    caseNumber: '',
+    cino: '',
+    fileNumber: '',
+    caseType: '',
+    caseStatus: 'PENDING',
     reason: '',
   });
   const [originalTag, setOriginalTag] = useState('');
@@ -22,6 +27,11 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
         fileName: file.fileName || '',
         caseId: file.caseId || '',
         rfidTag: file.rfidTag || '',
+        caseNumber: file.caseNumber || '',
+        cino: file.cino || '',
+        fileNumber: file.fileNumber || '',
+        caseType: file.caseType || '',
+        caseStatus: file.caseStatus || 'PENDING',
         reason: '',
       });
       setOriginalTag(file.rfidTag || '');
@@ -30,25 +40,31 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
 
   if (!file) return null;
 
-  const isTagChanged = normalizeRfidTag(formData.rfidTag) !== originalTag;
+  const isTagChanged = originalTag && formData.rfidTag && normalizeRfidTag(formData.rfidTag) !== originalTag;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!formData.fileName.trim() || !formData.caseId.trim() || !formData.rfidTag.trim()) {
-      setError('All metadata fields are required');
+    if (!formData.fileName.trim() || !formData.caseId.trim()) {
+      setError('File Name and Case ID are required');
       return;
     }
 
     try {
       setSaving(true);
       setError(null);
-      const updated = await updateFile(file.fileId, {
+      const payload = {
         fileName: formData.fileName.trim(),
         caseId: formData.caseId.trim(),
-        rfidTag: normalizeRfidTag(formData.rfidTag),
+        ...(formData.rfidTag.trim() ? { rfidTag: normalizeRfidTag(formData.rfidTag) } : {}),
+        caseNumber: formData.caseNumber.trim(),
+        cino: formData.cino.trim().toUpperCase(),
+        fileNumber: formData.fileNumber.trim(),
+        caseType: formData.caseType.trim().toUpperCase(),
+        caseStatus: formData.caseStatus,
         reason: formData.reason.trim(),
-      });
+      };
+      const updated = await updateFile(file.fileId, payload);
       if (onSaveSuccess) onSaveSuccess(updated);
       onClose();
     } catch (err) {
@@ -126,19 +142,94 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
               />
             </div>
 
+            {/* CINO & Case Number */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div className="edit-field">
+                <label className="edit-field-label" htmlFor="edit-cino">
+                  CINO
+                </label>
+                <input
+                  id="edit-cino"
+                  type="text"
+                  className="edit-field-input mono"
+                  placeholder="e.g. UPHC010000012024"
+                  value={formData.cino}
+                  onChange={(e) => setFormData({ ...formData, cino: e.target.value.toUpperCase() })}
+                />
+              </div>
+              <div className="edit-field">
+                <label className="edit-field-label" htmlFor="edit-caseNumber">
+                  Case Number
+                </label>
+                <input
+                  id="edit-caseNumber"
+                  type="text"
+                  className="edit-field-input"
+                  placeholder="e.g. BAIL/2024/001"
+                  value={formData.caseNumber}
+                  onChange={(e) => setFormData({ ...formData, caseNumber: e.target.value })}
+                />
+              </div>
+            </div>
 
-            {/* 6. Paired RFID Tag */}
+            {/* Case Type & Case Status */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div className="edit-field">
+                <label className="edit-field-label" htmlFor="edit-caseType">
+                  Case Type
+                </label>
+                <input
+                  id="edit-caseType"
+                  type="text"
+                  className="edit-field-input mono"
+                  placeholder="e.g. BAIL, WTAX"
+                  value={formData.caseType}
+                  onChange={(e) => setFormData({ ...formData, caseType: e.target.value.toUpperCase() })}
+                />
+              </div>
+              <div className="edit-field">
+                <label className="edit-field-label" htmlFor="edit-caseStatus">
+                  Case Status
+                </label>
+                <select
+                  id="edit-caseStatus"
+                  className="edit-field-input"
+                  value={formData.caseStatus}
+                  onChange={(e) => setFormData({ ...formData, caseStatus: e.target.value })}
+                >
+                  <option value="PENDING">PENDING</option>
+                  <option value="DISPOSED">DISPOSED</option>
+                </select>
+              </div>
+            </div>
+
+            {/* File Number */}
+            <div className="edit-field">
+              <label className="edit-field-label" htmlFor="edit-fileNumber">
+                File Number
+              </label>
+              <input
+                id="edit-fileNumber"
+                type="text"
+                className="edit-field-input"
+                placeholder="e.g. 1001/2024"
+                value={formData.fileNumber}
+                onChange={(e) => setFormData({ ...formData, fileNumber: e.target.value })}
+              />
+            </div>
+
+            {/* Paired RFID Tag */}
             <div className="edit-field">
               <label className="edit-field-label" htmlFor="edit-rfidTag">
-                6. Paired RFID EPC Tag
+                Paired RFID EPC Tag (Optional for unmapped)
               </label>
               <input
                 id="edit-rfidTag"
                 type="text"
                 className="edit-field-input mono"
+                placeholder="Leave blank if pending mapping"
                 value={formData.rfidTag}
                 onChange={(e) => setFormData({ ...formData, rfidTag: e.target.value })}
-                required
               />
 
               {isTagChanged && (

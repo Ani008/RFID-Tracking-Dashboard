@@ -6,6 +6,7 @@ import AppLayout from './layouts/AppLayout.jsx';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import CaseFiles from './pages/CaseFiles.jsx';
+import PendingMapping from './pages/PendingMapping.jsx';
 import RegisterFile from './pages/RegisterFile.jsx';
 import MovementLog from './pages/MovementLog.jsx';
 import CourtRoomStatus from './pages/CourtRoomStatus.jsx';
@@ -31,6 +32,7 @@ export default function App() {
           >
             <Route index element={<Dashboard />} />
             <Route path="/files" element={<CaseFiles />} />
+            <Route path="/rfid-pending" element={<PendingMapping />} />
             <Route
               path="/register"
               element={

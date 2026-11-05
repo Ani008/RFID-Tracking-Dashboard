@@ -13,6 +13,7 @@ import {
   FileBarChart,
   Users as UsersIcon,
   LogOut,
+  Clock,
 } from "lucide-react";
 import "./Sidebar.css";
 
@@ -31,6 +32,7 @@ export default function Sidebar() {
       items: [
         { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
         { to: "/files", label: "Case Files", icon: FolderOpen },
+        { to: "/rfid-pending", label: "Pending Mapping", icon: Clock },
         ...(isAdmin
           ? [{ to: "/register", label: "Register File", icon: Tag }]
           : []),

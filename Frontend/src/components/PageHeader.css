@@ -68,3 +68,17 @@
   font-size: 13px;
   flex-shrink: 0;
 }
+
+@media (max-width: 900px) {
+  .page-header {
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .page-header > div:first-child {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+  .page-header-title { font-size: 21px; }
+  .page-header-subtitle { font-size: 12.5px; }
+}

@@ -9,3 +9,57 @@
   min-width: 0;
   padding: 28px 36px 40px;
 }
+
+/* ---------- Mobile / handheld ---------- */
+.mobile-topbar,
+.sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    height: 52px;
+    padding: 0 12px;
+    background: var(--navy-900);
+    color: #f4f0e6;
+    border-bottom: 1px solid var(--navy-border);
+  }
+  .mobile-menu-btn {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+  .mobile-menu-btn:active { background: var(--navy-700); }
+  .mobile-topbar-icon { color: var(--gold-400); }
+  .mobile-topbar-title { font-size: 15px; font-weight: 600; }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(10, 18, 32, 0.55);
+  }
+
+  .app-content {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 18px 14px 32px;
+  }
+}

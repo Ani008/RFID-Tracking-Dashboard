@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import "./Sidebar.css";
 
-export default function Sidebar() {
+export default function Sidebar({ open = false }) {
   const { user, logout, isAdmin } = useAuth();
   const navigate = useNavigate();
 
@@ -61,7 +61,7 @@ export default function Sidebar() {
     .toUpperCase();
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${open ? " open" : ""}`}>
       <div className="sidebar-brand">
         <div className="sidebar-brand-icon">
           <Scale size={22} strokeWidth={1.75} />

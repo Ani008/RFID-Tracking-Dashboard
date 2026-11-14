@@ -9,6 +9,7 @@ import {
   bulkUploadFiles,
   getCaseTypes,
   listPendingMappingFiles,
+  updateRackLocation,
 } from '../controllers/fileController.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 
@@ -37,6 +38,8 @@ router.get('/', listFiles);
 router.get('/case-types', getCaseTypes);
 router.get('/pending-mapping', listPendingMappingFiles);
 router.get('/:fileId', getFile);
+
+router.put('/:fileId/rack', updateRackLocation); // Admin & Staff
 
 // Admin-only file management actions
 router.post('/', requireRole('admin'), createFile);

@@ -18,7 +18,7 @@ export function errorHandler(err, req, res, next) {
   // Multer file-upload errors (bad file type, too large, etc.) are client errors, not 500s.
   if (
     err.name === "MulterError" ||
-    /only \.(xlsx|xls|csv) files are supported/i.test(err.message || "")
+    /only \.(xlsx|xls|csv|json) files are supported/i.test(err.message || "")
   ) {
     return res.status(400).json({ error: err.message || "File upload error" });
   }

@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import * as XLSX from 'xlsx';
 import File from '../models/File.js';
 import MovementLog from '../models/MovementLog.js';
@@ -738,6 +739,76 @@ export async function deleteFile(req, res, next) {
       message: `File "${targetFileId}" and all associated data wiped successfully`,
       deletedFileId: targetFileId,
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/files/:fileId/rack (Admin + Staff)
+export async function updateRackLocation(req, res, next) {
+  try {
+    const { rack, shelf } = req.body || {};
+    if (rack === undefined || typeof rack !== 'string') {
+      return res.status(400).json({ error: 'rack must be a string' });
+    }
+    const trimmedRack = rack.trim();
+    if (!trimmedRack) {
+      return res.status(400).json({ error: 'rack cannot be empty' });
+    }
+    if (trimmedRack.length > 50) {
+      return res.status(400).json({ error: 'rack cannot exceed 50 characters' });
+    }
+    const validPattern = /^[a-zA-Z0-9\s-]+$/;
+    if (!validPattern.test(trimmedRack)) {
+      return res.status(400).json({ error: 'rack can only contain alphanumeric characters, spaces, and dashes' });
+    }
+
+    let trimmedShelf = '';
+    if (shelf !== undefined && shelf !== null) {
+      if (typeof shelf !== 'string') {
+        return res.status(400).json({ error: 'shelf must be a string' });
+      }
+      trimmedShelf = shelf.trim();
+      if (trimmedShelf.length > 50) {
+        return res.status(400).json({ error: 'shelf cannot exceed 50 characters' });
+      }
+      if (trimmedShelf && !validPattern.test(trimmedShelf)) {
+        return res.status(400).json({ error: 'shelf can only contain alphanumeric characters, spaces, and dashes' });
+      }
+    }
+
+    const rawId = String(req.params.fileId || '').trim();
+    if (!rawId) return res.status(400).json({ error: 'fileId is required' });
+
+    const query = mongoose.Types.ObjectId.isValid(rawId)
+      ? { $or: [{ _id: rawId }, { fileId: rawId }] }
+      : { fileId: rawId };
+
+    const file = await File.findOne(query);
+    if (!file) return res.status(404).json({ error: `File "${rawId}" not found` });
+
+    const before = file.rackLocation ? (file.rackLocation.toObject?.() || { ...file.rackLocation }) : null;
+    const newRackLoc = {
+      rack: trimmedRack,
+      shelf: trimmedShelf,
+      updatedAt: new Date(),
+      updatedBy: req.user?._id,
+    };
+
+    file.rackLocation = newRackLoc;
+    await file.save();
+
+    await AuditLog.create({
+      userId: req.user?._id,
+      username: req.user?.username || 'system',
+      action: 'RACK_UPDATE',
+      targetType: 'File',
+      targetId: file.fileId,
+      before: { rackLocation: before },
+      after: { rackLocation: newRackLoc },
+    });
+
+    res.json(file);
   } catch (err) {
     next(err);
   }

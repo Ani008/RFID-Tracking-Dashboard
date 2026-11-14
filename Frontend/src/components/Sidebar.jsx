@@ -14,6 +14,8 @@ import {
   Users as UsersIcon,
   LogOut,
   Clock,
+  ClipboardList,
+  Smartphone,
 } from "lucide-react";
 import "./Sidebar.css";
 
@@ -33,6 +35,8 @@ export default function Sidebar() {
         { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
         { to: "/files", label: "Case Files", icon: FolderOpen },
         { to: "/rfid-pending", label: "Pending Mapping", icon: Clock },
+        { to: "/cause-list", label: "Cause List", icon: ClipboardList },
+        { to: "/handheld", label: "Handheld Search", icon: Smartphone },
         ...(isAdmin
           ? [{ to: "/register", label: "Register File", icon: Tag }]
           : []),

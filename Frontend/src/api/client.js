@@ -23,6 +23,13 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (res) => res,
   (err) => {
+    if (axios.isCancel(err) || err.code === 'ERR_CANCELED' || err.name === 'CanceledError') {
+      const cancelErr = new Error('canceled');
+      cancelErr.name = 'CanceledError';
+      cancelErr.code = 'ERR_CANCELED';
+      return Promise.reject(cancelErr);
+    }
+
     if (err.response?.status === 401) {
       // If we get an unauthorized error on a non-login endpoint, clear invalid token
       const isLoginRequest = err.config?.url?.includes('/auth/login');

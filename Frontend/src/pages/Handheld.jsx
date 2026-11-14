@@ -16,6 +16,15 @@ function AvailabilityBadge({ avail }) {
   return <span className={`status-badge tone-${c.tone}`}>{c.label}</span>;
 }
 
+function isCancel(e) {
+  return (
+    e?.name === 'CanceledError' ||
+    e?.name === 'AbortError' ||
+    e?.code === 'ERR_CANCELED' ||
+    e?.message === 'canceled'
+  );
+}
+
 // ─── Rack Update Modal ─────────────────────────────────────────────────────
 function RackModal({ item, onClose, onSaved }) {
   const [rack, setRack] = useState(item.rackLocation?.rack || '');
@@ -164,7 +173,7 @@ export default function Handheld() {
     Object.keys(params).forEach((k) => params[k] === undefined && delete params[k]);
     fetchHandheldCauseList(params, ctrl.signal)
       .then(setData)
-      .catch((e) => { if (e.name !== 'CanceledError') setError(e.message); })
+      .catch((e) => { if (!isCancel(e)) setError(e.message); })
       .finally(() => setLoading(false));
   }, [date, q, caseType, court]);
 

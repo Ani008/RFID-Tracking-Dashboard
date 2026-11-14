@@ -48,6 +48,15 @@ function formatDate(str) {
   catch { return str; }
 }
 
+function isCancel(e) {
+  return (
+    e?.name === 'CanceledError' ||
+    e?.name === 'AbortError' ||
+    e?.code === 'ERR_CANCELED' ||
+    e?.message === 'canceled'
+  );
+}
+
 // ─── Case History Drawer ───────────────────────────────────────────────────
 function CaseHistoryDrawer({ cino, onClose }) {
   const [data, setData] = useState(null);
@@ -61,7 +70,7 @@ function CaseHistoryDrawer({ cino, onClose }) {
     setError(null);
     fetchCaseHistory(cino, ctrl.signal)
       .then(setData)
-      .catch((e) => { if (e.name !== 'CanceledError') setError(e.message); })
+      .catch((e) => { if (!isCancel(e)) setError(e.message); })
       .finally(() => setLoading(false));
     return () => ctrl.abort();
   }, [cino]);
@@ -382,7 +391,7 @@ function CauseListTab({ onRowClick }) {
     setError(null);
     fetchCauseListEntries(params, ctrl.signal)
       .then(setData)
-      .catch((e) => { if (e.name !== 'CanceledError') setError(e.message); })
+      .catch((e) => { if (!isCancel(e)) setError(e.message); })
       .finally(() => setLoading(false));
     return () => ctrl.abort();
   }, [date, court, caseType, status, match, q, page]);
@@ -521,7 +530,7 @@ function UnmatchedTab({ isAdmin, onNotify, onRowClick }) {
     setError(null);
     fetchUnmatchedEntries({ date: date || undefined, page, limit: 25 }, ctrl.signal)
       .then(setData)
-      .catch((e) => { if (e.name !== 'CanceledError') setError(e.message); })
+      .catch((e) => { if (!isCancel(e)) setError(e.message); })
       .finally(() => setLoading(false));
     return () => ctrl.abort();
   }, [date, page]);
@@ -635,7 +644,7 @@ function SyncLogsTab({ isAdmin, onNotify }) {
     setError(null);
     fetchSyncRuns({ page, limit: 20 }, ctrl.signal)
       .then(setData)
-      .catch((e) => { if (e.name !== 'CanceledError') setError(e.message); })
+      .catch((e) => { if (!isCancel(e)) setError(e.message); })
       .finally(() => setLoading(false));
     return () => ctrl.abort();
   }, [page]);

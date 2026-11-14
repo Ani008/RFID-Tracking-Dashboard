@@ -134,8 +134,8 @@ async function run() {
   });
   assert.strictEqual(file3Res.status, 201, 'File 3 should be created');
 
-  // Sync a cause list containing these 3 files + 1 unmatched row for date 2026-12-01
-  const testDate = '2026-12-01';
+  // Sync a cause list containing these 3 files + 1 unmatched row for unique date
+  const testDate = '2026-12-' + String((rand % 28) + 1).padStart(2, '0');
   const csvData = [
     'Date,Court,Serial,CaseNo,CINO,Bench,Type,Status',
     `${testDate},1,1,WP/HH/${rand}/1,${cinoLocated},Chief Justice,BAIL,PENDING`,

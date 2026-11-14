@@ -7,6 +7,7 @@ import { normalizeRfidTag } from '../utils/rfidHelper.js';
 
 const VALID_LOCATIONS = ['SHELF_ROOM', 'COURT_ROOM', 'IN_TRANSIT'];
 const VALID_CASE_STATUSES = ['PENDING', 'DISPOSED'];
+const MAX_LOOKUP_TAGS = 500;
 
 function validateFilePayload(body, { partial = false } = {}) {
   const errors = [];
@@ -565,6 +566,46 @@ export async function bulkUploadFiles(req, res, next) {
       skippedCount: rawRows.length - insertedCount,
       errors: errors.slice(0, 200),
       truncatedErrorCount: Math.max(0, errors.length - 200),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/files/lookup-tags
+export async function lookupTags(req, res, next) {
+  try {
+    const { tags } = req.body || {};
+    if (!Array.isArray(tags) || tags.length === 0) {
+      return res.status(400).json({ error: 'tags must be a non-empty array of RFID tag strings' });
+    }
+    if (tags.length > MAX_LOOKUP_TAGS) {
+      return res.status(400).json({ error: `A maximum of ${MAX_LOOKUP_TAGS} tags can be looked up at once` });
+    }
+
+    const normalized = [];
+    const seen = new Set();
+    for (const raw of tags) {
+      if (typeof raw !== 'string') continue;
+      const tag = normalizeRfidTag(raw);
+      if (tag && !seen.has(tag)) {
+        seen.add(tag);
+        normalized.push(tag);
+      }
+    }
+    if (normalized.length === 0) {
+      return res.status(400).json({ error: 'No valid hexadecimal RFID tags were provided' });
+    }
+
+    const files = await File.find({ rfidTag: { $in: normalized } });
+    const byTag = new Map(files.map((f) => [f.rfidTag, f]));
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      results: normalized.map((tag) => {
+        const file = byTag.get(tag);
+        return file ? { tag, found: true, file } : { tag, found: false };
+      }),
     });
   } catch (err) {
     next(err);

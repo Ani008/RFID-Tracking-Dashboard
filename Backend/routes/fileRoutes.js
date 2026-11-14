@@ -10,6 +10,7 @@ import {
   getCaseTypes,
   listPendingMappingFiles,
   updateRackLocation,
+  lookupTags,
 } from '../controllers/fileController.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 
@@ -37,6 +38,8 @@ router.use(requireAuth);
 router.get('/', listFiles);
 router.get('/case-types', getCaseTypes);
 router.get('/pending-mapping', listPendingMappingFiles);
+// Available to every authenticated role (admin + staff) — read-only
+router.post('/lookup-tags', lookupTags);
 router.get('/:fileId', getFile);
 
 router.put('/:fileId/rack', updateRackLocation); // Admin & Staff

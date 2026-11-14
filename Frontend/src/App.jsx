@@ -13,6 +13,7 @@ import CourtRoomStatus from './pages/CourtRoomStatus.jsx';
 import Gates from './pages/Gates.jsx';
 import Users from './pages/Users.jsx';
 import Reports from './pages/Reports.jsx';
+import Search from './pages/Search.jsx';
 import CauseList from './pages/CauseList.jsx';
 import Handheld from './pages/Handheld.jsx';
 
@@ -35,6 +36,7 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="/files" element={<CaseFiles />} />
             <Route path="/rfid-pending" element={<PendingMapping />} />
+            <Route path="/search" element={<Search />} />
             <Route
               path="/register"
               element={

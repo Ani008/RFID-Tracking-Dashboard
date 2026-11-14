@@ -10,7 +10,7 @@ info:
     - Rate limit: 120 requests / minute / IP (HTTP 429 when exceeded).
     - All timestamps are ISO-8601 UTC.
 servers:
-  - url: http://<MY_VPS_IP>:4000
+  - url: http://localhost:4000
     description: VPS (replace with the real IP / domain and port)
 tags:
   - name: System

@@ -5,6 +5,7 @@ import {
   fetchMovementReport,
   fetchUnknownTags,
   fetchCaseSummary,
+  fetchDailyTagging,
   downloadReportCsv,
 } from '../api/reports.js';
 import {
@@ -17,10 +18,14 @@ import {
   Search,
   Filter,
   Layers,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Clock,
   CheckCircle2,
+  Eye,
+  FileText,
+  List,
 } from 'lucide-react';
 import { LocationBadge, DirectionBadge } from '../components/StatusBadge.jsx';
 import FileDetailModal from '../components/FileDetailModal.jsx';
@@ -31,7 +36,46 @@ const REPORT_TABS = [
   { id: 'movements', label: 'Movement History', icon: Activity },
   { id: 'unknown-tags', label: 'Unknown EPC Scans', icon: AlertTriangle },
   { id: 'case-summary', label: 'Case-Level Summary', icon: Layers },
+  { id: 'daily-report', label: 'Daily Reports', icon: CalendarDays },
 ];
+
+// YYYY-MM-DD for the user's *local* calendar day (toISOString would give the UTC day,
+// which is the wrong day for the first hours of the morning in India).
+function toLocalDateString(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function formatDayLabel(dateStr) {
+  // `T00:00:00` without a "Z" is parsed as local time, so the label never shifts a day
+  return new Date(`${dateStr}T00:00:00`).toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
+
+const DAILY_PAGE_SIZES = [20, 50, 100];
+
+// Page numbers to render, e.g. [1, 'gap-1', 4, 5, 6, 'gap-2', 20]. Strings are "…" gaps.
+function getPageNumbers(current, total) {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set([1, total, current - 1, current, current + 1]);
+  if (current <= 3) [2, 3, 4].forEach((p) => pages.add(p));
+  if (current >= total - 2) [total - 1, total - 2, total - 3].forEach((p) => pages.add(p));
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const out = [];
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - sorted[i - 1] > 1) out.push(`gap-${i}`);
+    out.push(p);
+  });
+  return out;
+}
 
 export default function Reports() {
   const [activeTab, setActiveTab] = useState('court-room-files');
@@ -43,6 +87,9 @@ export default function Reports() {
   const [caseSearch, setCaseSearch] = useState('CASE-1001');
   const [thresholdHours, setThresholdHours] = useState(4);
   const [page, setPage] = useState(1);
+  const [dailySelectedDay, setDailySelectedDay] = useState('');
+  const [dailyViewMode, setDailyViewMode] = useState('files'); // 'files' | 'summary'
+  const [dailyPageSize, setDailyPageSize] = useState(DAILY_PAGE_SIZES[0]);
 
   // Data states
   const [reportData, setReportData] = useState(null);
@@ -55,20 +102,20 @@ export default function Reports() {
   const applyDatePreset = (preset) => {
     setDatePreset(preset);
     setPage(1);
+    setDailySelectedDay('');
     const now = new Date();
 
     if (preset === 'today') {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      setFromDate(start.toISOString().slice(0, 10));
-      setToDate(now.toISOString().slice(0, 10));
+      setFromDate(toLocalDateString(now));
+      setToDate(toLocalDateString(now));
     } else if (preset === '7d') {
       const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      setFromDate(past.toISOString().slice(0, 10));
-      setToDate(now.toISOString().slice(0, 10));
+      setFromDate(toLocalDateString(past));
+      setToDate(toLocalDateString(now));
     } else if (preset === '30d') {
       const past = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      setFromDate(past.toISOString().slice(0, 10));
-      setToDate(now.toISOString().slice(0, 10));
+      setFromDate(toLocalDateString(past));
+      setToDate(toLocalDateString(now));
     } else if (preset === 'all') {
       setFromDate('');
       setToDate('');
@@ -104,6 +151,14 @@ export default function Reports() {
         }
         const res = await fetchCaseSummary(caseSearch.trim());
         setReportData(res);
+      } else if (activeTab === 'daily-report') {
+        // Daily report works on plain calendar days in the user's own time zone with pagination
+        const dailyParams = { tz: BROWSER_TIME_ZONE, page, limit: dailyPageSize };
+        if (fromDate) dailyParams.from = fromDate;
+        if (toDate) dailyParams.to = toDate;
+        if (dailySelectedDay) dailyParams.day = dailySelectedDay;
+        const res = await fetchDailyTagging(dailyParams);
+        setReportData(res);
       }
     } catch (err) {
       setError(err.message || 'Failed to generate report');
@@ -111,23 +166,32 @@ export default function Reports() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, fromDate, toDate, gateFilter, directionFilter, caseSearch, thresholdHours, page]);
+  }, [activeTab, fromDate, toDate, gateFilter, directionFilter, caseSearch, thresholdHours, page, dailySelectedDay, dailyPageSize]);
 
   useEffect(() => {
     loadReport();
   }, [loadReport]);
 
-  const handleExportCsv = async () => {
+  const handleExportCsv = async (format = 'csv') => {
     try {
       setExporting(true);
       setError(null);
       const params = {};
-      if (fromDate) params.from = `${fromDate}T00:00:00.000Z`;
-      if (toDate) params.to = `${toDate}T23:59:59.999Z`;
-      if (gateFilter) params.gateId = gateFilter;
-      if (directionFilter) params.direction = directionFilter;
-      if (activeTab === 'court-room-files') params.thresholdHours = thresholdHours;
-      if (activeTab === 'case-summary') params.caseId = caseSearch.trim();
+      if (activeTab === 'daily-report') {
+        params.tz = BROWSER_TIME_ZONE;
+        if (fromDate) params.from = fromDate;
+        if (toDate) params.to = toDate;
+        if (dailySelectedDay) params.day = dailySelectedDay;
+        if (format) params.format = format;
+      } else {
+        if (fromDate) params.from = `${fromDate}T00:00:00.000Z`;
+        if (toDate) params.to = `${toDate}T23:59:59.999Z`;
+        if (gateFilter) params.gateId = gateFilter;
+        if (directionFilter) params.direction = directionFilter;
+        if (activeTab === 'court-room-files') params.thresholdHours = thresholdHours;
+        if (activeTab === 'case-summary') params.caseId = caseSearch.trim();
+        if (format) params.format = format;
+      }
 
       await downloadReportCsv(activeTab, params);
       setExportSuccess(true);
@@ -146,26 +210,39 @@ export default function Reports() {
           title="Operational & Historical Reports"
           subtitle="Generate, filter, and export court records, dwell audits, and movement registers"
         />
-        <button
-          className="btn-export-csv"
-          onClick={handleExportCsv}
-          disabled={exporting || loading}
-          title="Download report as CSV for spreadsheet or physical register"
-        >
-          {exporting ? (
-            <span>Exporting...</span>
-          ) : exportSuccess ? (
-            <>
-              <CheckCircle2 size={16} />
-              <span>Downloaded CSV</span>
-            </>
-          ) : (
-            <>
-              <Download size={16} />
-              <span>Export CSV</span>
-            </>
+        <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+          <button
+            className="btn-export-csv"
+            onClick={() => handleExportCsv('csv')}
+            disabled={exporting || loading}
+            title="Download report as CSV"
+          >
+            {exporting ? (
+              <span>Exporting...</span>
+            ) : exportSuccess ? (
+              <>
+                <CheckCircle2 size={16} />
+                <span>Downloaded!</span>
+              </>
+            ) : (
+              <>
+                <Download size={16} />
+                <span>Export CSV</span>
+              </>
+            )}
+          </button>
+          {activeTab === 'daily-report' && (
+            <button
+              className="btn-export-csv report-export-btn-excel"
+              onClick={() => handleExportCsv('xlsx')}
+              disabled={exporting || loading}
+              title="Download daily report as Excel spreadsheet (.xlsx)"
+            >
+              <FileSpreadsheet size={16} />
+              <span>Export Excel</span>
+            </button>
           )}
-        </button>
+        </div>
       </div>
 
       {/* Report Navigation Tabs */}
@@ -177,6 +254,8 @@ export default function Reports() {
             onClick={() => {
               setActiveTab(id);
               setPage(1);
+              setDailySelectedDay('');
+              setReportData(null); // don't render the previous tab's data in this tab's layout
             }}
           >
             <Icon size={16} />
@@ -226,6 +305,8 @@ export default function Reports() {
                   onChange={(e) => {
                     setDatePreset('custom');
                     setFromDate(e.target.value);
+                    setPage(1);
+                    setDailySelectedDay('');
                   }}
                   title="From Date"
                 />
@@ -237,6 +318,8 @@ export default function Reports() {
                   onChange={(e) => {
                     setDatePreset('custom');
                     setToDate(e.target.value);
+                    setPage(1);
+                    setDailySelectedDay('');
                   }}
                   title="To Date"
                 />
@@ -646,6 +729,299 @@ export default function Reports() {
           )}
         </>
       )}
+
+      {/* Tab 5: Daily Reports (files tagged per day) */}
+      {activeTab === 'daily-report' && (() => {
+        const daily = reportData?.report === 'daily-tagging' ? reportData : null;
+        const peakCount = daily?.peakDay?.filesTagged || 0;
+
+        return (
+          <>
+            <div className="report-summary-cards">
+              <div className="report-summary-card">
+                <div className="user-stat-title">Tagged Today</div>
+                <div className="user-stat-value" style={{ color: 'var(--accent-600)' }}>
+                  {daily?.today?.filesTagged ?? 0}
+                </div>
+              </div>
+              <div className="report-summary-card">
+                <div className="user-stat-title">Tagged Yesterday</div>
+                <div className="user-stat-value">{daily?.yesterday?.filesTagged ?? 0}</div>
+              </div>
+              <div className="report-summary-card">
+                <div className="user-stat-title">Total in Selected Range</div>
+                <div className="user-stat-value" style={{ color: 'var(--green-600)' }}>
+                  {daily?.totalTagged ?? 0}
+                </div>
+              </div>
+              <div className="report-summary-card">
+                <div className="user-stat-title">Average per Working Day</div>
+                <div className="user-stat-value">{daily?.averagePerDay ?? 0}</div>
+              </div>
+              <div className="report-summary-card">
+                <div className="user-stat-title">Best Day</div>
+                <div className="user-stat-value" style={{ color: 'var(--amber-600)' }}>
+                  {daily?.peakDay ? daily.peakDay.filesTagged : 0}
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  {daily?.peakDay ? formatDayLabel(daily.peakDay.date) : '—'}
+                </div>
+              </div>
+            </div>
+
+            <div className="report-table-card">
+              <div className="daily-table-header-row">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600 }}>
+                    {dailyViewMode === 'files' ? 'Daily Edited Files' : 'Daily Tagging Summary'}
+                  </h3>
+                  {daily?.files && dailyViewMode === 'files' && (
+                    <span className="user-status-badge active" style={{ fontSize: '0.75rem' }}>
+                      {daily.files.total} total {daily.files.total === 1 ? 'file' : 'files'}
+                    </span>
+                  )}
+                  {dailySelectedDay && (
+                    <span
+                      className="user-status-badge active"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                      }}
+                      onClick={() => {
+                        setDailySelectedDay('');
+                        setPage(1);
+                      }}
+                      title="Click to clear filter"
+                    >
+                      Filtered: {formatDayLabel(dailySelectedDay)} ✕
+                    </span>
+                  )}
+                </div>
+
+                <div className="daily-view-toggle">
+                  <button
+                    className={`daily-view-toggle-btn ${dailyViewMode === 'files' ? 'active' : ''}`}
+                    onClick={() => setDailyViewMode('files')}
+                  >
+                    <List size={14} />
+                    <span>Files List</span>
+                  </button>
+                  <button
+                    className={`daily-view-toggle-btn ${dailyViewMode === 'summary' ? 'active' : ''}`}
+                    onClick={() => setDailyViewMode('summary')}
+                  >
+                    <CalendarDays size={14} />
+                    <span>Daily Summary</span>
+                  </button>
+                </div>
+              </div>
+
+              {dailyViewMode === 'files' ? (
+                <>
+                  <table className="users-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '60px' }}>#</th>
+                        <th>File Name</th>
+                        <th style={{ width: '120px', textAlign: 'center' }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loading ? (
+                        <tr>
+                          <td colSpan={3} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                            Loading edited files...
+                          </td>
+                        </tr>
+                      ) : !daily?.files?.items || daily.files.items.length === 0 ? (
+                        <tr>
+                          <td colSpan={3} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                            No files were edited in the selected date range.
+                          </td>
+                        </tr>
+                      ) : (
+                        daily.files.items.map((file, idx) => (
+                          <tr key={file.fileId + (file.editedAt || idx)}>
+                            <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                              {((daily.files.page || 1) - 1) * (daily.files.limit || 20) + idx + 1}
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                <FileText size={17} style={{ color: 'var(--accent-600)', flexShrink: 0 }} />
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{file.fileName}</span>
+                                {file.day && (
+                                  <span className="user-status-badge daily-day-badge daily-day-badge-muted" style={{ marginLeft: 'auto' }}>
+                                    {formatDayLabel(file.day)}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <button
+                                className="btn-action"
+                                onClick={() => setSelectedFileId(file.fileId)}
+                                title="View File Details"
+                              >
+                                <Eye size={15} />
+                                <span>View</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+
+                  {/* Always visible (even for a single page) so users can see totals and change page size */}
+                  {daily?.files && (() => {
+                    const { total, page: curPage, limit: curLimit, totalPages, items: pageItems } = daily.files;
+                    const startNo = total === 0 ? 0 : (curPage - 1) * curLimit + 1;
+                    const endNo = total === 0 ? 0 : startNo + pageItems.length - 1;
+                    return (
+                      <div className="report-pagination daily-pagination">
+                        <span>
+                          {total === 0 ? 'No files' : `Showing ${startNo}–${endNo} of ${total} ${total === 1 ? 'file' : 'files'}`}
+                        </span>
+
+                        <div className="daily-pagination-controls">
+                          <label className="daily-page-size">
+                            <span>Rows per page</span>
+                            <select
+                              className="report-date-input"
+                              value={dailyPageSize}
+                              onChange={(e) => {
+                                setDailyPageSize(Number(e.target.value));
+                                setPage(1);
+                              }}
+                            >
+                              {DAILY_PAGE_SIZES.map((n) => (
+                                <option key={n} value={n}>{n}</option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <div className="daily-page-buttons">
+                            <button
+                              className="btn-action"
+                              onClick={() => setPage((p) => Math.max(1, p - 1))}
+                              disabled={curPage <= 1 || loading}
+                            >
+                              <ChevronLeft size={15} />
+                              <span>Previous</span>
+                            </button>
+
+                            {getPageNumbers(curPage, totalPages).map((p) =>
+                              typeof p === 'string' ? (
+                                <span key={p} className="daily-page-gap">…</span>
+                              ) : (
+                                <button
+                                  key={p}
+                                  className={`daily-page-num ${p === curPage ? 'active' : ''}`}
+                                  onClick={() => setPage(p)}
+                                  disabled={loading}
+                                  aria-current={p === curPage ? 'page' : undefined}
+                                >
+                                  {p}
+                                </button>
+                              )
+                            )}
+
+                            <button
+                              className="btn-action"
+                              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                              disabled={curPage >= totalPages || loading}
+                            >
+                              <span>Next</span>
+                              <ChevronRight size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : (
+                <>
+                  <table className="users-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Files Tagged</th>
+                        <th>First-time Tags</th>
+                        <th>Re-assigned Tags</th>
+                        <th>Tagged By</th>
+                        <th style={{ width: '100px', textAlign: 'center' }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loading ? (
+                        <tr>
+                          <td colSpan={6} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                            Counting tagged files per day...
+                          </td>
+                        </tr>
+                      ) : !daily || daily.items.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-muted)' }}>
+                            No files were tagged in the selected date range.
+                          </td>
+                        </tr>
+                      ) : (
+                        daily.items.map((row) => (
+                          <tr key={row.date}>
+                            <td style={{ fontWeight: 600 }}>
+                              {formatDayLabel(row.date)}
+                              {row.date === daily.today?.date && (
+                                <span className="user-status-badge active daily-day-badge">Today</span>
+                              )}
+                              {row.date === daily.yesterday?.date && (
+                                <span className="user-status-badge daily-day-badge daily-day-badge-muted">Yesterday</span>
+                              )}
+                            </td>
+                            <td>
+                              <div className="daily-count-cell">
+                                <strong>{row.filesTagged}</strong>
+                                <div className="daily-bar-track">
+                                  <div
+                                    className="daily-bar-fill"
+                                    style={{ width: `${peakCount ? Math.max(4, (row.filesTagged / peakCount) * 100) : 0}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </td>
+                            <td>{row.firstTime}</td>
+                            <td>{row.reassigned}</td>
+                            <td style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                              {row.byUser.map((u) => `${u.username} (${u.count})`).join(', ') || '—'}
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <button
+                                className="btn-action"
+                                onClick={() => {
+                                  setDailySelectedDay(row.date);
+                                  setDailyViewMode('files');
+                                  setPage(1);
+                                }}
+                                title="View files edited on this day"
+                              >
+                                <Eye size={14} />
+                                <span>Files</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          </>
+        );
+      })()}
 
       {selectedFileId && (
         <FileDetailModal

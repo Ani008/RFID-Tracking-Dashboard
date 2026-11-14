@@ -5,6 +5,7 @@ import {
   Scale,
   LayoutDashboard,
   FolderOpen,
+  ScanSearch,
   Tag,
   DoorOpen,
   Activity,
@@ -19,7 +20,7 @@ import {
 } from "lucide-react";
 import "./Sidebar.css";
 
-export default function Sidebar() {
+export default function Sidebar({ open = false }) {
   const { user, logout, isAdmin } = useAuth();
   const navigate = useNavigate();
 
@@ -35,6 +36,7 @@ export default function Sidebar() {
         { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
         { to: "/files", label: "Case Files", icon: FolderOpen },
         { to: "/rfid-pending", label: "Pending Mapping", icon: Clock },
+        { to: "/search", label: "Search", icon: ScanSearch },
         { to: "/cause-list", label: "Cause List", icon: ClipboardList },
         { to: "/handheld", label: "Handheld Search", icon: Smartphone },
         ...(isAdmin
@@ -65,7 +67,7 @@ export default function Sidebar() {
     .toUpperCase();
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${open ? " open" : ""}`}>
       <div className="sidebar-brand">
         <div className="sidebar-brand-icon">
           <Scale size={22} strokeWidth={1.75} />
@@ -131,7 +133,7 @@ export default function Sidebar() {
             target="_blank"
             rel="noopener noreferrer"
           >
-            CALYONIX INFOTECH
+            CALYONIX INFOTECH & ACME DIGITEK
           </a>
         </span>
       </div>

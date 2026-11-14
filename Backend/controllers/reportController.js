@@ -1,6 +1,12 @@
 import File from '../models/File.js';
 import MovementLog from '../models/MovementLog.js';
 import UnknownTag from '../models/UnknownTag.js';
+import AuditLog from '../models/AuditLog.js';
+import * as XLSX from 'xlsx';
+
+const DEFAULT_TIME_ZONE = 'Asia/Kolkata';
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 function parseDateRange(from, to) {
   const filter = {};
@@ -45,6 +51,293 @@ function toCsvString(headers, rows) {
   const rowLines = rows.map((row) => row.map(escapeCsvField).join(','));
   return [headerLine, ...rowLines].join('\r\n');
 }
+
+// ---------------------------------------------------------------------------
+// Daily tagging report helpers
+// ---------------------------------------------------------------------------
+
+function httpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function resolveTimeZone(tz) {
+  const candidate = String(tz || DEFAULT_TIME_ZONE);
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: candidate });
+    return candidate;
+  } catch {
+    throw httpError(400, `Invalid time zone "${candidate}"`);
+  }
+}
+
+// Returns the calendar day (YYYY-MM-DD) of `date` as seen in the given time zone.
+function dayStringInTz(date, tz) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+// Pure calendar arithmetic on a YYYY-MM-DD string (no time zone involved).
+function addDays(dayStr, delta) {
+  const d = new Date(`${dayStr}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Counts how many distinct files were tagged (RFID tag paired / re-assigned)
+ * on each calendar day. Every tagging action is already stamped in the audit
+ * log (TAG_REASSIGN from the Edit File screen, FILE_CREATE with a tag from
+ * Register File), so this also covers all tagging done before this report
+ * existed.
+ *
+ * `fromDay` / `toDay` are optional YYYY-MM-DD strings, inclusive, interpreted
+ * in time zone `tz`.
+ */
+async function aggregateDailyTagging({ tz, fromDay, toDay }) {
+  const match = {
+    $or: [
+      { action: 'TAG_REASSIGN' },
+      { action: 'FILE_CREATE', 'after.rfidTag': { $exists: true, $nin: [null, ''] } },
+    ],
+  };
+
+  // Coarse timestamp pre-filter so the timestamp index can be used. Padded by a
+  // day on each side because the real day boundary depends on the time zone;
+  // the exact filtering is done on the per-day string below.
+  if (fromDay || toDay) {
+    match.timestamp = {};
+    if (fromDay) match.timestamp.$gte = new Date(new Date(`${fromDay}T00:00:00.000Z`).getTime() - MS_PER_DAY);
+    if (toDay) match.timestamp.$lte = new Date(new Date(`${toDay}T00:00:00.000Z`).getTime() + 2 * MS_PER_DAY);
+  }
+
+  const dayRange = {};
+  if (fromDay) dayRange.$gte = fromDay;
+  if (toDay) dayRange.$lte = toDay;
+
+  const pipeline = [
+    { $match: match },
+    {
+      $addFields: {
+        day: { $dateToString: { date: '$timestamp', format: '%Y-%m-%d', timezone: tz } },
+        // 1 = file had no tag before (first-time tagging), 0 = tag was replaced
+        isFirst: {
+          $cond: [
+            {
+              $or: [
+                { $eq: ['$action', 'FILE_CREATE'] },
+                { $eq: [{ $ifNull: ['$before.rfidTag', ''] }, ''] },
+              ],
+            },
+            1,
+            0,
+          ],
+        },
+      },
+    },
+    ...(Object.keys(dayRange).length ? [{ $match: { day: dayRange } }] : []),
+    { $sort: { timestamp: 1 } },
+    // One row per (day, file) so a file edited twice in a day counts once
+    {
+      $group: {
+        _id: { day: '$day', fileId: '$targetId' },
+        isFirst: { $max: '$isFirst' },
+        user: { $last: '$username' },
+      },
+    },
+    {
+      $group: {
+        _id: '$_id.day',
+        filesTagged: { $sum: 1 },
+        firstTime: { $sum: '$isFirst' },
+        users: { $push: '$user' },
+      },
+    },
+    { $sort: { _id: -1 } },
+  ];
+
+  const rows = await AuditLog.aggregate(pipeline).allowDiskUse(true);
+
+  return rows.map((r) => {
+    const perUser = {};
+    for (const u of r.users) perUser[u || 'unknown'] = (perUser[u || 'unknown'] || 0) + 1;
+    return {
+      date: r._id,
+      filesTagged: r.filesTagged,
+      firstTime: r.firstTime,
+      reassigned: r.filesTagged - r.firstTime,
+      byUser: Object.entries(perUser)
+        .map(([username, count]) => ({ username, count }))
+        .sort((a, b) => b.count - a.count || a.username.localeCompare(b.username)),
+    };
+  });
+}
+
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// 'YYYY-MM-DD' -> '24-Oct-2026' (text, for CSV)
+function formatDayForExport(dayStr) {
+  if (!dayStr || !DAY_RE.test(dayStr)) return '';
+  const [y, m, d] = dayStr.split('-');
+  return `${d}-${MONTH_ABBR[Number(m) - 1]}-${y}`;
+}
+
+// 'YYYY-MM-DD' -> Excel date serial number (days since 1899-12-30).
+// Pure calendar maths on UTC, so the server's time zone can never shift the day.
+function excelSerialFromDay(dayStr) {
+  if (!dayStr || !DAY_RE.test(dayStr)) return '';
+  const [y, m, d] = dayStr.split('-').map(Number);
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / MS_PER_DAY);
+}
+
+export async function getDailyEditedFiles({ from, to, tz, day, page = 1, limit = 25 }) {
+  const timeZone = resolveTimeZone(tz);
+  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 25, 1), 100000);
+
+  const match = {
+    action: { $in: ['FILE_CREATE', 'FILE_UPDATE', 'TAG_REASSIGN'] },
+  };
+
+  const fromDay = day || from;
+  const toDay = day || to;
+
+  if (fromDay || toDay) {
+    match.timestamp = {};
+    if (fromDay) match.timestamp.$gte = new Date(new Date(`${fromDay}T00:00:00.000Z`).getTime() - MS_PER_DAY);
+    if (toDay) match.timestamp.$lte = new Date(new Date(`${toDay}T00:00:00.000Z`).getTime() + 2 * MS_PER_DAY);
+  }
+
+  const dayFilter = {};
+  if (day) {
+    dayFilter.day = day;
+  } else {
+    if (from) dayFilter.day = { ...(dayFilter.day || {}), $gte: from };
+    if (to) dayFilter.day = { ...(dayFilter.day || {}), $lte: to };
+  }
+
+  const pipeline = [
+    { $match: match },
+    {
+      $addFields: {
+        day: { $dateToString: { date: '$timestamp', format: '%Y-%m-%d', timezone: timeZone } },
+      },
+    },
+    ...(Object.keys(dayFilter).length ? [{ $match: dayFilter }] : []),
+    { $sort: { timestamp: -1 } },
+    {
+      $group: {
+        _id: { day: '$day', fileId: '$targetId' },
+        lastTimestamp: { $first: '$timestamp' },
+        lastUser: { $first: '$username' },
+        lastAction: { $first: '$action' },
+        afterDoc: { $first: '$after' },
+      },
+    },
+    {
+      $lookup: {
+        from: 'files',
+        localField: '_id.fileId',
+        foreignField: 'fileId',
+        as: 'fileDoc',
+      },
+    },
+    {
+      $unwind: {
+        path: '$fileDoc',
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        day: '$_id.day',
+        fileId: '$_id.fileId',
+        fileName: { $ifNull: ['$fileDoc.fileName', { $ifNull: ['$afterDoc.fileName', '$_id.fileId'] }] },
+        rfidTag: { $ifNull: ['$fileDoc.rfidTag', { $ifNull: ['$afterDoc.rfidTag', ''] }] },
+        editedAt: '$lastTimestamp',
+        editedBy: '$lastUser',
+        action: '$lastAction',
+      },
+    },
+    { $sort: { editedAt: -1 } },
+    {
+      $facet: {
+        total: [{ $count: 'count' }],
+        items: [
+          { $skip: (pageNum - 1) * limitNum },
+          { $limit: limitNum },
+        ],
+      },
+    },
+  ];
+
+  const results = await AuditLog.aggregate(pipeline).allowDiskUse(true);
+  const total = results[0]?.total[0]?.count || 0;
+  const items = results[0]?.items || [];
+
+  return {
+    items,
+    total,
+    page: pageNum,
+    limit: limitNum,
+    totalPages: Math.max(1, Math.ceil(total / limitNum)),
+  };
+}
+
+async function buildDailyTaggingReport({ from, to, tz, day, page, limit }) {
+  const timeZone = resolveTimeZone(tz);
+
+  if (from && !DAY_RE.test(from)) throw httpError(400, '"from" must be in YYYY-MM-DD format');
+  if (to && !DAY_RE.test(to)) throw httpError(400, '"to" must be in YYYY-MM-DD format');
+  if (from && to && from > to) throw httpError(400, '"from" date cannot be after "to" date');
+  if (day && !DAY_RE.test(day)) throw httpError(400, '"day" must be in YYYY-MM-DD format');
+
+  const todayStr = dayStringInTz(new Date(), timeZone);
+  const yesterdayStr = addDays(todayStr, -1);
+
+  // Today / yesterday cards ignore the date filter, so they get their own query.
+  const [items, recent, filesResult] = await Promise.all([
+    aggregateDailyTagging({ tz: timeZone, fromDay: from, toDay: to }),
+    aggregateDailyTagging({ tz: timeZone, fromDay: yesterdayStr, toDay: todayStr }),
+    getDailyEditedFiles({ from, to, tz: timeZone, day, page, limit }),
+  ]);
+
+  const countFor = (day) => recent.find((r) => r.date === day)?.filesTagged || 0;
+  const totalTagged = items.reduce((sum, r) => sum + r.filesTagged, 0);
+  const peak = items.reduce((best, r) => (!best || r.filesTagged > best.filesTagged ? r : best), null);
+
+  return {
+    report: 'daily-tagging',
+    timeZone,
+    items,
+    totalDays: items.length,
+    totalTagged,
+    averagePerDay: items.length ? Math.round((totalTagged / items.length) * 10) / 10 : 0,
+    peakDay: peak ? { date: peak.date, filesTagged: peak.filesTagged } : null,
+    today: { date: todayStr, filesTagged: countFor(todayStr) },
+    yesterday: { date: yesterdayStr, filesTagged: countFor(yesterdayStr) },
+    files: filesResult,
+  };
+}
+
+// GET /api/reports/daily-tagging?from=YYYY-MM-DD&to=YYYY-MM-DD&tz=Asia/Kolkata&day=YYYY-MM-DD&page=1&limit=25
+export async function dailyTagging(req, res, next) {
+  try {
+    const { from, to, tz, day, page, limit } = req.query;
+    const report = await buildDailyTaggingReport({ from, to, tz, day, page, limit });
+    res.json(report);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+}
+
 
 // GET /api/reports/court-room-files?from=&to=&thresholdHours=
 export async function courtRoomFiles(req, res, next) {
@@ -320,6 +613,54 @@ export async function exportReportCsv(req, res, next) {
       ]);
       csvContent = toCsvString(headers, rows);
       fileName = `case_${caseId}_summary_${dateStr}.csv`;
+    } else if (type === 'daily-report' || type === 'daily-tagging') {
+      let filesResult;
+      try {
+        filesResult = await getDailyEditedFiles({
+          from,
+          to,
+          tz: req.query.tz,
+          day: req.query.day,
+          page: 1,
+          limit: 100000,
+        });
+      } catch (err) {
+        if (err.status) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+
+      const format = String(req.query.format || '').toLowerCase();
+      const isXlsx = format === 'xlsx' || format === 'excel';
+
+      // Date comes first. In .xlsx it is a real Excel date (sortable / filterable),
+      // in .csv it is text like "24-Oct-2026", which Excel also recognises as a date.
+      const headers = ['Date', 'File Name', 'RFID Tag'];
+      const rows = filesResult.items.map((f) => [
+        isXlsx ? excelSerialFromDay(f.day) : formatDayForExport(f.day),
+        f.fileName || '',
+        f.rfidTag || '',
+      ]);
+
+      if (isXlsx) {
+        const wsData = [headers, ...rows];
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        // Show the date column as dd-mmm-yyyy and give the columns a readable width
+        for (let r = 1; r < wsData.length; r += 1) {
+          const cell = ws[XLSX.utils.encode_cell({ r, c: 0 })];
+          if (cell && cell.t === 'n') cell.z = 'dd-mmm-yyyy';
+        }
+        ws['!cols'] = [{ wch: 14 }, { wch: 60 }, { wch: 28 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Daily Edited Files');
+        const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        fileName = `daily_report_${dateStr}.xlsx`;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        return res.status(200).send(buffer);
+      }
+
+      csvContent = toCsvString(headers, rows);
+      fileName = `daily_report_${dateStr}.csv`;
     } else {
       return res.status(400).json({ error: `Unknown report type "${type}"` });
     }

@@ -50,3 +50,10 @@ export async function bulkUploadFiles(file) {
   });
   return data; // { totalRows, insertedCount, skippedCount, errors }
 }
+
+// Look up files by raw RFID scan strings. The backend normalizes each tag
+// exactly like registration does. Returns { results: [{ tag, found, file? }] }.
+export async function lookupTags(tags) {
+  const { data } = await apiClient.post("/files/lookup-tags", { tags });
+  return data;
+}

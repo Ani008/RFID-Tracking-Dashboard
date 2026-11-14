@@ -2,6 +2,10 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yamljs';
 
 import authRoutes from './routes/authRoutes.js';
 import userRoutes from './routes/userRoutes.js';
@@ -11,12 +15,8 @@ import gateRoutes from './routes/gateRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import causeListRoutes from './routes/causeListRoutes.js';
 import handheldRoutes from './routes/handheldRoutes.js';
-import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import swaggerUi from 'swagger-ui-express';
-import YAML from 'yamljs';
 import publicRoutes from './routes/publicRoutes.js';
+import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 export function createApp() {
   const app = express();
@@ -27,7 +27,6 @@ export function createApp() {
 
   // Security HTTP Headers
   app.use(helmet());
-  
 
   // Strict CORS policy
   const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173';

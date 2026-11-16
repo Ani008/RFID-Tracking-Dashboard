@@ -121,23 +121,15 @@ export async function listFiles(req, res, next) {
       }
     }
 
-    // 5. caseType = ALL | <value> (must exist in DB)
+    // 5. caseType = ALL | <value>
+    // Any non-empty value is accepted: configured types (e.g. WTAX, BAIL) must be
+    // selectable even before a file of that type exists; the result is simply empty.
     if (req.query.caseType !== undefined) {
       if (typeof req.query.caseType !== 'string') {
         return res.status(400).json({ error: 'caseType must be a string' });
       }
       const ct = req.query.caseType.trim().toUpperCase();
       if (ct && ct !== 'ALL') {
-        const distinctTypes = await File.distinct('caseType', {
-          caseType: { $exists: true, $ne: '' },
-          archived: { $ne: true },
-        });
-        const existingUpper = distinctTypes.map((t) => String(t).trim().toUpperCase());
-        if (!existingUpper.includes(ct)) {
-          return res.status(400).json({
-            error: `caseType "${ct}" not found in database. Must be one of configured case types or ALL.`,
-          });
-        }
         andConditions.push({ caseType: ct });
       }
     }

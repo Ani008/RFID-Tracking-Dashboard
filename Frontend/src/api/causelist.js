@@ -5,6 +5,11 @@ export async function fetchCauseListEntries(params = {}, signal) {
   return data; // { items, total, page, limit, totalPages }
 }
 
+export async function fetchCauseListCaseTypes(signal) {
+  const { data } = await apiClient.get('/causelist/case-types', { signal });
+  return data; // string[]
+}
+
 export async function fetchUnmatchedEntries(params = {}, signal) {
   const { data } = await apiClient.get('/causelist/unmatched', { params, signal });
   return data;

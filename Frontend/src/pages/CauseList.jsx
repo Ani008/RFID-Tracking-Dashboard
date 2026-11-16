@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext.jsx';
 import {
   fetchCauseListEntries, fetchUnmatchedEntries, fetchSyncRuns,
   fetchSyncRun, fetchCaseHistory, triggerSync, retrySyncRun, triggerRematch,
+  fetchCauseListCaseTypes,
 } from '../api/causelist.js';
 import './CauseList.css';
 
@@ -354,8 +355,17 @@ function CauseListTab({ onRowClick }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [caseTypesList, setCaseTypesList] = useState([]);
 
   const debounceRef = useRef();
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchCauseListCaseTypes(ctrl.signal)
+      .then((types) => setCaseTypesList(types || []))
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [data?.total]);
 
   const updateUrl = useCallback((overrides = {}) => {
     setSearchParams((prev) => {
@@ -441,9 +451,12 @@ function CauseListTab({ onRowClick }) {
           <input type="text" className="cl-text-input" value={court} placeholder="Court No." onChange={(e) => handleFilterChange(setCourt, 'court', e.target.value)} style={{ width: 90 }} />
           <select value={caseType} onChange={(e) => handleFilterChange(setCaseType, 'ct', e.target.value)}>
             <option value="ALL">All Types</option>
-            <option value="BAIL">BAIL</option>
-            <option value="WTAX">WTAX</option>
-            <option value="CRLR">CRLR</option>
+            {(caseType !== 'ALL' && !caseTypesList.includes(caseType)
+              ? [...caseTypesList, caseType]
+              : caseTypesList
+            ).map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
           </select>
           <select value={status} onChange={(e) => handleFilterChange(setStatus, 'status', e.target.value)}>
             <option value="ALL">All Statuses</option>

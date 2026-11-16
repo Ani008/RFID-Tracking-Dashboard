@@ -511,7 +511,7 @@ function CauseListTab({ onRowClick }) {
                 </tr>
               ))}
               {!loading && (data?.items || []).length === 0 && (
-                <tr><td colSpan="11" className="cl-empty-cell">No cause list entries found</td></tr>
+                <tr><td colSpan="11" className="cl-empty-cell">No files found</td></tr>
               )}
             </tbody>
           </table>

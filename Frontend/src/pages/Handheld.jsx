@@ -266,7 +266,7 @@ export default function Handheld() {
       {loading && <div className="hh-state">Searching…</div>}
       {error && <div className="hh-state error">{error}</div>}
       {!loading && !error && data && (data.items || []).length === 0 && (
-        <div className="hh-state empty">No results for {data.date}</div>
+        <div className="hh-state empty">No files found for {data.date}</div>
       )}
       {!loading && !error && data && (data.items || []).length > 0 && (
         <div className="hh-card-grid">

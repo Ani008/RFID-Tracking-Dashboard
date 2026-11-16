@@ -4,6 +4,8 @@ import File from '../models/File.js';
 import MovementLog from '../models/MovementLog.js';
 import AuditLog from '../models/AuditLog.js';
 import { normalizeRfidTag } from '../utils/rfidHelper.js';
+import { mergeCaseTypes } from '../utils/caseTypes.js';
+import { relinkEntriesForFile, rematchEntries } from '../services/causelist/syncService.js';
 
 const VALID_LOCATIONS = ['SHELF_ROOM', 'COURT_ROOM', 'IN_TRANSIT'];
 const VALID_CASE_STATUSES = ['PENDING', 'DISPOSED'];
@@ -53,7 +55,7 @@ export async function getCaseTypes(req, res, next) {
       .map((t) => t.trim().toUpperCase())
       .filter((val, idx, arr) => arr.indexOf(val) === idx)
       .sort();
-    res.json(sorted);
+    res.json(mergeCaseTypes(sorted));
   } catch (err) {
     next(err);
   }
@@ -345,6 +347,9 @@ export async function createFile(req, res, next) {
       },
     });
 
+    // Link any cause list rows that were synced before this file existed
+    try { await relinkEntriesForFile(file); } catch (e) { console.error('[createFile] relink failed', e.message); }
+
     res.status(201).json(file);
   } catch (err) {
     next(err);
@@ -544,6 +549,11 @@ export async function bulkUploadFiles(req, res, next) {
           });
         }
       }
+    }
+
+    if (insertedCount > 0) {
+      try { await rematchEntries({ username: req.user?.username || 'system' }); }
+      catch (e) { console.error('[bulkUploadFiles] rematch failed', e.message); }
     }
 
     await AuditLog.create({
@@ -748,6 +758,8 @@ export async function updateFile(req, res, next) {
         after,
         reason: req.body.reason ? String(req.body.reason).trim() : '',
       });
+
+      try { await relinkEntriesForFile(file); } catch (e) { console.error('[updateFile] relink failed', e.message); }
     }
 
     res.json(file);

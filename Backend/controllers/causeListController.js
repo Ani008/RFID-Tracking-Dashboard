@@ -4,6 +4,7 @@ import { runSync, rematchEntries, retryFailedRows } from '../services/causelist/
 import { ManualUploadAdapter } from '../services/causelist/adapters/manualUploadAdapter.js';
 import { HttpAdapter } from '../services/causelist/adapters/httpAdapter.js';
 import File from '../models/File.js';
+import { mergeCaseTypes } from '../utils/caseTypes.js';
 
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -88,10 +89,7 @@ export async function listCauseListCaseTypes(req, res, next) {
       CauseListEntry.distinct('caseType', { caseType: { $exists: true, $ne: '' } }),
       File.distinct('caseType', { caseType: { $exists: true, $ne: '' }, archived: { $ne: true } }),
     ]);
-    const types = [...new Set([...fromEntries, ...fromFiles]
-      .filter((t) => typeof t === 'string' && t.trim().length > 0)
-      .map((t) => t.trim().toUpperCase()))].sort();
-    res.json(types);
+    res.json(mergeCaseTypes(fromEntries, fromFiles));
   } catch (err) {
     next(err);
   }
@@ -180,6 +178,20 @@ export async function listCauseListEntries(req, res, next) {
       }
     }
 
+    // RFID mapping status (applied in the query so pagination and totals stay correct)
+    if (mapped !== undefined && mapped !== '' && String(mapped).toLowerCase() !== 'all') {
+      const wantMapped = String(mapped).toLowerCase() === 'true';
+      const mappedFileIds = await File.distinct('_id', {
+        rfidTag: { $exists: true, $nin: ['', null] },
+        archived: { $ne: true },
+      });
+      andConditions.push(
+        wantMapped
+          ? { file: { $in: mappedFileIds } }
+          : { $or: [{ file: null }, { file: { $nin: mappedFileIds } }] }
+      );
+    }
+
     if (andConditions.length > 0) {
       filter.$and = andConditions;
     }
@@ -196,15 +208,7 @@ export async function listCauseListEntries(req, res, next) {
       CauseListEntry.countDocuments(filter),
     ]);
 
-    // Client-side/joined filter on mapped if requested
-    let items = entries;
-    if (mapped !== undefined && mapped !== '') {
-      const isMapped = String(mapped).toLowerCase() === 'true';
-      items = items.filter((e) => {
-        const hasTag = Boolean(e.file?.rfidTag && e.file?.rfidTag.trim().length > 0);
-        return isMapped ? hasTag : !hasTag;
-      });
-    }
+    const items = entries;
 
     res.json({
       items,

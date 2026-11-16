@@ -65,9 +65,12 @@ READER_MODE=mock
 DESKTOPSCANNER=local
 CLIENT_URL=http://localhost:5173
 
-# Optional: External Cause List Integration
-CAUSELIST_API_URL=https://causelist.example.gov.in/api/v1
-CAUSELIST_API_KEY=your-api-key-here
+# Case types always listed in dropdowns (real data types are added automatically)
+CASE_TYPES=WTAX,BAIL
+
+# Optional: External Cause List Integration (leave empty to use file upload)
+# CAUSELIST_API_URL=https://your-court-causelist-api/endpoint
+# CAUSELIST_API_KEY=your-api-key-here
 ```
 
 Create `Frontend/.env`:
@@ -174,3 +177,17 @@ GET    /api/reports/unknown-tags?from=&to=&page=
 GET    /api/reports/case/:caseId
 GET    /api/reports/:type/export             (CSV stream)
 ```
+
+
+---
+
+## 📥 Syncing the Cause List (production)
+
+1. Open **Cause List -> Sync Cause List** (admin only).
+2. **File Upload:** choose a `.csv`, `.xlsx` or `.json` file. Recognised columns (any order, case-insensitive):
+   `Cause List Date`, `Court No`, `Bench / Judge`, `Sr No`, `Case Number`, `CINO`, `Case Type`, `Status`.
+   Dates may be `YYYY-MM-DD`, `DD-MM-YYYY` or `DD/MM/YYYY`.
+3. **HTTP / API:** works only when `CAUSELIST_API_URL` is set in `Backend/.env`; otherwise it shows a clear error and adds nothing.
+4. Rows are matched to existing RFID files by CINO, then Case Number (+ type). Re-syncing never creates duplicates.
+5. Files registered or edited **after** a sync are linked to their cause list rows automatically.
+6. Nothing is shown until real data exists: empty pages display "No files found".

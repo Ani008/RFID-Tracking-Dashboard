@@ -394,3 +394,57 @@ export async function retryFailedRows({ runId, userId = null, username = 'system
   return { recoveredCount, remainingFailuresCount: remainingFailures.length, run };
 }
 
+
+/**
+ * Links existing UNMATCHED / AMBIGUOUS cause list entries to a File.
+ * Called when a file is registered or its CINO / case number / type changes,
+ * so cause list rows synced BEFORE the file existed become searchable
+ * (handheld, rack location) without waiting for another sync.
+ * Never creates entries or files, so it cannot produce duplicates.
+ */
+export async function relinkEntriesForFile(file) {
+  if (!file || file.archived) return 0;
+  const or = [];
+  if (file.cino) or.push({ cino: String(file.cino).trim().toUpperCase() });
+  const cn = file.caseNumber ? String(file.caseNumber).trim() : '';
+  if (cn) or.push({ caseNumber: cn });
+  if (file.caseId) or.push({ caseNumber: String(file.caseId).trim() });
+  if (or.length === 0) return 0;
+
+  const entries = await CauseListEntry.find({
+    matchStatus: { $in: ['UNMATCHED', 'AMBIGUOUS'] },
+    $or: or,
+  });
+
+  let linked = 0;
+  for (const entry of entries) {
+    let matched = null;
+    let reason = '';
+
+    if (entry.cino) {
+      matched = await File.findOne({ cino: entry.cino, archived: { $ne: true } });
+      if (matched) reason = 'CINO';
+    }
+    if (!matched && entry.caseNumber) {
+      const q = {
+        $or: [{ caseNumber: entry.caseNumber }, { caseId: entry.caseNumber }],
+        archived: { $ne: true },
+      };
+      if (entry.caseType) q.caseType = entry.caseType;
+      const candidates = await File.find(q).limit(2);
+      if (candidates.length === 1) {
+        matched = candidates[0];
+        reason = 'CASE_NUMBER';
+      }
+    }
+    if (matched) {
+      entry.file = matched._id;
+      entry.matchStatus = 'MATCHED';
+      entry.matchReason = reason;
+      entry.lastSyncedAt = new Date();
+      await entry.save();
+      linked++;
+    }
+  }
+  return linked;
+}

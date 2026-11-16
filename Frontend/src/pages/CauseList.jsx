@@ -185,6 +185,13 @@ function SyncDialog({ onClose, onDone }) {
                 onChange={(e) => setDate(e.target.value)}
               />
 
+              {mode === 'http' && (
+                <div className="cl-alert warning" style={{ marginTop: '0.9rem' }}>
+                  Fetches the cause list from the court API configured on the server
+                  (CAUSELIST_API_URL). If it is not configured, use File Upload instead.
+                </div>
+              )}
+
               {mode === 'upload' && (
                 <>
                   <label className="cl-form-label" style={{ marginTop: '0.9rem' }}>
@@ -341,6 +348,7 @@ function CauseListTab({ onRowClick }) {
   const urlCaseType = searchParams.get('ct') || 'ALL';
   const urlStatus = searchParams.get('status') || 'ALL';
   const urlMatch = searchParams.get('match') || 'ALL';
+  const urlMapped = searchParams.get('mapped') || 'ALL';
   const urlQ = searchParams.get('q') || '';
   const urlPage = parseInt(searchParams.get('page'), 10) || 1;
 
@@ -350,6 +358,7 @@ function CauseListTab({ onRowClick }) {
   const [caseType, setCaseType] = useState(urlCaseType);
   const [status, setStatus] = useState(urlStatus);
   const [match, setMatch] = useState(urlMatch);
+  const [mapped, setMapped] = useState(urlMapped);
   const [page, setPage] = useState(urlPage);
 
   const [data, setData] = useState(null);
@@ -371,7 +380,7 @@ function CauseListTab({ onRowClick }) {
     setSearchParams((prev) => {
       const n = new URLSearchParams(prev);
       n.set('tab', 'list');
-      const vals = { date, court, ct: caseType, status, match, q, page, ...overrides };
+      const vals = { date, court, ct: caseType, status, match, mapped, q, page, ...overrides };
       Object.entries(vals).forEach(([k, v]) => {
         if (v && v !== 'ALL' && String(v) !== '1') n.set(k, v);
         else n.delete(k);
@@ -379,7 +388,7 @@ function CauseListTab({ onRowClick }) {
       if (vals.page && String(vals.page) !== '1') n.set('page', vals.page);
       return n;
     });
-  }, [date, court, caseType, status, match, q, page, setSearchParams]);
+  }, [date, court, caseType, status, match, mapped, q, page, setSearchParams]);
 
   const load = useCallback((overrides = {}) => {
     const params = {
@@ -388,6 +397,7 @@ function CauseListTab({ onRowClick }) {
       caseType: caseType !== 'ALL' ? caseType : undefined,
       status: status !== 'ALL' ? status : undefined,
       match: match !== 'ALL' ? match : undefined,
+      mapped: mapped !== 'ALL' ? mapped : undefined,
       q: q || undefined,
       page,
       limit: 25,
@@ -404,7 +414,7 @@ function CauseListTab({ onRowClick }) {
       .catch((e) => { if (!isCancel(e)) setError(e.message); })
       .finally(() => setLoading(false));
     return () => ctrl.abort();
-  }, [date, court, caseType, status, match, q, page]);
+  }, [date, court, caseType, status, match, mapped, q, page]);
 
   useEffect(() => { return load(); }, [load]);
 
@@ -429,11 +439,11 @@ function CauseListTab({ onRowClick }) {
   };
 
   const clearFilters = () => {
-    setQ(''); setDate(''); setCourt(''); setCaseType('ALL'); setStatus('ALL'); setMatch('ALL'); setPage(1);
+    setQ(''); setDate(''); setCourt(''); setCaseType('ALL'); setStatus('ALL'); setMatch('ALL'); setMapped('ALL'); setPage(1);
     setSearchParams({ tab: 'list' });
   };
 
-  const hasFilters = q || date || court || caseType !== 'ALL' || status !== 'ALL' || match !== 'ALL';
+  const hasFilters = q || date || court || caseType !== 'ALL' || status !== 'ALL' || match !== 'ALL' || mapped !== 'ALL';
 
   return (
     <>
@@ -468,6 +478,11 @@ function CauseListTab({ onRowClick }) {
             <option value="MATCHED">Matched</option>
             <option value="UNMATCHED">Unmatched</option>
             <option value="AMBIGUOUS">Ambiguous</option>
+          </select>
+          <select value={mapped} onChange={(e) => handleFilterChange(setMapped, 'mapped', e.target.value)} title="RFID mapping status">
+            <option value="ALL">All RFID</option>
+            <option value="true">RFID Mapped</option>
+            <option value="false">Not Mapped</option>
           </select>
         </div>
         {hasFilters && (

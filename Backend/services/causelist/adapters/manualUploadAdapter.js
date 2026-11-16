@@ -35,6 +35,18 @@ function formatExcelOrStringDate(val) {
   if (typeof val === 'string') {
     const trimmed = val.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    // DD-MM-YYYY / DD/MM/YYYY / DD.MM.YYYY (common in Indian court exports)
+    const dmy = trimmed.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (dmy) {
+      const [, dd, mm, yyyy] = dmy;
+      return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+    }
+    // YYYY/MM/DD
+    const ymd = trimmed.match(/^(\d{4})[/.](\d{1,2})[/.](\d{1,2})$/);
+    if (ymd) {
+      const [, yyyy, mm, dd] = ymd;
+      return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+    }
     const num = Number(trimmed);
     if (!isNaN(num) && num > 30000 && num < 60000) {
       // Excel serial date to Asia/Kolkata date string (D5)

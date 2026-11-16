@@ -7,6 +7,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "seed": "node scripts/seed.js",
+    "purge:demo": "node scripts/purge-demo-data.js",
     "migrate:phase1": "node scripts/migrate-phase1.js",
     "test:phase1": "node scripts/test_phase1.js",
     "test:phase2": "node scripts/test_phase2.js",

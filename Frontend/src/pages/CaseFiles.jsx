@@ -295,7 +295,7 @@ export default function CaseFiles() {
 
         {!error && !loading && files.length === 0 && (
           <div className="panel-empty">
-            {hasActiveFilters ? 'No files match the selected filter criteria.' : 'No files registered yet.'}
+            {hasActiveFilters ? 'No files found for the selected filters.' : 'No files found.'}
           </div>
         )}
 

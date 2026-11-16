@@ -9,6 +9,7 @@ import {
   listCauseListEntries,
   listUnmatchedEntries,
   getCaseHistory,
+  listCauseListCaseTypes,
 } from '../controllers/causeListController.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 
@@ -32,6 +33,7 @@ router.post('/sync/:runId/retry', requireRole('admin'), retrySyncRun);
 router.post('/rematch', requireRole('admin'), triggerRematch);
 
 // Admin & Staff read operations
+router.get('/case-types', listCauseListCaseTypes);
 router.get('/sync-runs', listSyncRuns);
 router.get('/sync-runs/:id', getSyncRun);
 router.get('/unmatched', listUnmatchedEntries);

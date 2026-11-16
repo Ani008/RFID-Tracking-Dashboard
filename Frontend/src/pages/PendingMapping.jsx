@@ -230,8 +230,8 @@ export default function PendingMapping() {
         {!error && !loading && files.length === 0 && (
           <div className="panel-empty">
             {hasActiveFilters
-              ? 'No pending files match your search criteria.'
-              : 'All files are currently mapped with RFID tags! No pending records.'}
+              ? 'No files found for the selected filters.'
+              : 'No files found. There are no files pending RFID mapping.'}
           </div>
         )}
 

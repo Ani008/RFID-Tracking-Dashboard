@@ -51,7 +51,6 @@ Full-stack real-time RFID tracking dashboard for legal case files inside court b
 |---|---|---|---|
 | `admin` | `Admin@123` | **Admin** | Full system administration, file edits, syncs, user management |
 | `staff` | `Staff@123` | **Staff** | Day-to-day operations, movements, reports, handheld search, rack updates |
-| `clerk1` | `Clerk@123` | **Staff** | Record room clerk account |
 
 ---
 
@@ -86,8 +85,12 @@ VITE_SOCKET_URL=http://localhost:4000
 cd Backend
 npm install
 
-# 1. Seed demo database with initial users, gates, and files
+# 1. Create the initial admin/staff accounts and gates (no demo case files, never deletes data)
 npm run seed
+
+# 1b. If an older version already put demo files / cause list rows in your DB, remove them once:
+npm run purge:demo            # dry run - only reports
+npm run purge:demo -- --apply # deletes the demo rows
 
 # 2. Run schema migration (safe & idempotent)
 npm run migrate:phase1 -- --dry-run   # Preview migration changes

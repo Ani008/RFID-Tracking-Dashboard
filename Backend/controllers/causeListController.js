@@ -3,6 +3,7 @@ import SyncRun from '../models/SyncRun.js';
 import { runSync, rematchEntries, retryFailedRows } from '../services/causelist/syncService.js';
 import { ManualUploadAdapter } from '../services/causelist/adapters/manualUploadAdapter.js';
 import { HttpAdapter } from '../services/causelist/adapters/httpAdapter.js';
+import File from '../models/File.js';
 
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -25,6 +26,11 @@ export async function triggerSync(req, res, next) {
         return res.status(400).json({ error: 'date (YYYY-MM-DD) or an uploaded file is required' });
       }
       adapter = new HttpAdapter();
+      if (!adapter.isConfigured()) {
+        return res.status(400).json({
+          error: 'External Cause List API is not configured. Upload a cause list file (.csv, .xlsx, .json) to sync.',
+        });
+      }
     }
 
     const syncRun = await runSync({
@@ -69,6 +75,23 @@ export async function triggerRematch(req, res, next) {
       username: req.user?.username || 'admin',
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/causelist/case-types (Admin & staff)
+// Distinct case types actually present in the cause list and the file inventory.
+export async function listCauseListCaseTypes(req, res, next) {
+  try {
+    const [fromEntries, fromFiles] = await Promise.all([
+      CauseListEntry.distinct('caseType', { caseType: { $exists: true, $ne: '' } }),
+      File.distinct('caseType', { caseType: { $exists: true, $ne: '' }, archived: { $ne: true } }),
+    ]);
+    const types = [...new Set([...fromEntries, ...fromFiles]
+      .filter((t) => typeof t === 'string' && t.trim().length > 0)
+      .map((t) => t.trim().toUpperCase()))].sort();
+    res.json(types);
   } catch (err) {
     next(err);
   }

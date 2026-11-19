@@ -241,7 +241,7 @@ export default function CaseFiles() {
           <Search size={15} strokeWidth={2} />
           <input
             type="text"
-            placeholder="Case No / CINO / File No…"
+            placeholder="File ID, Case ID, Case No, CINO, name…"
             value={searchTerm}
             onChange={handleSearchChange}
           />

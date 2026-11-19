@@ -191,7 +191,7 @@ export default function PendingMapping() {
           <Search size={15} strokeWidth={2} />
           <input
             type="text"
-            placeholder="Search pending by Case No / CINO / File No…"
+            placeholder="Search pending by File ID, Case ID, Case No, CINO, name…"
             value={searchTerm}
             onChange={handleSearchChange}
           />

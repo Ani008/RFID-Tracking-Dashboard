@@ -61,6 +61,38 @@ export async function getCaseTypes(req, res, next) {
   }
 }
 
+// Fields a user can type into the search box.
+const SEARCH_FIELDS = [
+  'fileId',
+  'fileName',
+  'caseId',
+  'caseName',
+  'caseNumber',
+  'cino',
+  'fileNumber',
+  'rfidTag',
+];
+
+// Turns search-box text into Mongo conditions. Every word must match at least one
+// field (case-insensitive "contains"), so "income tax gupta" works even when the
+// words are spread over the file name and case name. A single token that looks
+// like a scanned RFID tag also matches the normalized stored tag.
+function buildTextSearchConditions(raw) {
+  const text = raw.trim().slice(0, 100);
+  if (!text) return [];
+  const tokens = [...new Set(text.split(/\s+/).filter(Boolean))].slice(0, 6);
+  const normalizedTag = tokens.length === 1 ? normalizeRfidTag(text) : '';
+  return tokens.map((token) => {
+    const re = new RegExp(escapeRegex(token), 'i');
+    return {
+      $or: [
+        ...SEARCH_FIELDS.map((f) => ({ [f]: re })),
+        ...(normalizedTag ? [{ rfidTag: normalizedTag }] : []),
+      ],
+    };
+  });
+}
+
 // GET /api/files/pending-mapping
 export async function listPendingMappingFiles(req, res, next) {
   req.query.mapped = 'false';
@@ -134,40 +166,14 @@ export async function listFiles(req, res, next) {
       }
     }
 
-    // 6. q = text; case-insensitive contains match on caseNumber OR cino OR fileNumber
-    if (req.query.q !== undefined) {
-      if (typeof req.query.q !== 'string') {
-        return res.status(400).json({ error: 'q must be a string' });
+    // 6 + 7. Free-text search (`q` from Case Files / Pending Mapping, `search` from
+    // other callers). Both look across every identifier on a file.
+    for (const key of ['q', 'search']) {
+      if (req.query[key] === undefined) continue;
+      if (typeof req.query[key] !== 'string') {
+        return res.status(400).json({ error: `${key} must be a string` });
       }
-      const rawQ = req.query.q.trim().slice(0, 50);
-      if (rawQ.length > 0) {
-        const re = new RegExp(escapeRegex(rawQ), 'i');
-        andConditions.push({
-          $or: [{ caseNumber: re }, { cino: re }, { fileNumber: re }],
-        });
-      }
-    }
-
-    // 7. search (existing search across fileId, fileName, caseId, caseName, rfidTag)
-    if (req.query.search !== undefined) {
-      if (typeof req.query.search !== 'string') {
-        return res.status(400).json({ error: 'search must be a string' });
-      }
-      const trimmedSearch = req.query.search.trim().slice(0, 100);
-      if (trimmedSearch.length > 0) {
-        const re = new RegExp(escapeRegex(trimmedSearch), 'i');
-        const normalizedSearch = normalizeRfidTag(trimmedSearch);
-        andConditions.push({
-          $or: [
-            { fileId: re },
-            { fileName: re },
-            { caseId: re },
-            { caseName: re },
-            { rfidTag: re },
-            ...(normalizedSearch ? [{ rfidTag: normalizedSearch }] : []),
-          ],
-        });
-      }
+      andConditions.push(...buildTextSearchConditions(req.query[key]));
     }
 
     if (andConditions.length > 0) {

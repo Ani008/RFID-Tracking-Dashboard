@@ -347,6 +347,11 @@ export default function CaseFiles() {
                   </td>
                   <td onClick={() => setSelectedFileId(f.fileId)}>
                     <div><LocationBadge location={f.currentLocation} /></div>
+                    {f.storageLocation && (
+                      <div style={{ fontSize: '11px', color: 'var(--text)', marginTop: '4px', fontWeight: 600 }}>
+                        {f.storageLocation}
+                      </div>
+                    )}
                     {f.rackLocation?.rack && (
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
                         Rack: {f.rackLocation.rack} {f.rackLocation.shelf ? `(${f.rackLocation.shelf})` : ''}

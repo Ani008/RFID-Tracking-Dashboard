@@ -222,3 +222,19 @@ button.result-card:hover { border-color: var(--accent-500); }
   .find-launch { width: 100%; justify-content: center; padding: 14px 18px; font-size: 15px; }
   .scan-title { font-size: 16px; }
 }
+.result-location {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--accent-100);
+  border-radius: var(--radius-sm);
+}
+.result-location span {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent-600);
+}
+.result-location strong { font-size: 16px; word-break: break-word; }
+.result-card.featured .result-location strong { font-size: 20px; }

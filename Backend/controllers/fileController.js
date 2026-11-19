@@ -5,11 +5,11 @@ import MovementLog from '../models/MovementLog.js';
 import AuditLog from '../models/AuditLog.js';
 import { normalizeRfidTag } from '../utils/rfidHelper.js';
 import { mergeCaseTypes } from '../utils/caseTypes.js';
-import { relinkEntriesForFile, rematchEntries } from '../services/causelist/syncService.js';
 
 const VALID_LOCATIONS = ['SHELF_ROOM', 'COURT_ROOM', 'IN_TRANSIT'];
 const VALID_CASE_STATUSES = ['PENDING', 'DISPOSED'];
 const MAX_LOOKUP_TAGS = 500;
+const MAX_LOCATION_LENGTH = 200;
 
 function validateFilePayload(body, { partial = false } = {}) {
   const errors = [];
@@ -33,6 +33,14 @@ function validateFilePayload(body, { partial = false } = {}) {
     const statusUpper = String(body.caseStatus).trim().toUpperCase();
     if (!VALID_CASE_STATUSES.includes(statusUpper)) {
       errors.push(`caseStatus must be one of ${VALID_CASE_STATUSES.join(', ')}`);
+    }
+  }
+
+  if (body.storageLocation !== undefined && body.storageLocation !== null) {
+    if (typeof body.storageLocation !== 'string') {
+      errors.push('storageLocation must be text');
+    } else if (body.storageLocation.trim().length > MAX_LOCATION_LENGTH) {
+      errors.push(`Location must be ${MAX_LOCATION_LENGTH} characters or fewer`);
     }
   }
 
@@ -70,6 +78,7 @@ const SEARCH_FIELDS = [
   'caseNumber',
   'cino',
   'fileNumber',
+  'storageLocation',
   'rfidTag',
 ];
 
@@ -273,6 +282,7 @@ export async function createFile(req, res, next) {
       caseType,
       caseStatus,
       rackLocation,
+      storageLocation,
     } = req.body;
 
     const normalizedTag = rfidTag ? normalizeRfidTag(rfidTag) : undefined;
@@ -308,6 +318,7 @@ export async function createFile(req, res, next) {
       ...(normalizedCino ? { cino: normalizedCino } : {}),
       ...(caseNumber ? { caseNumber: String(caseNumber).trim() } : {}),
       ...(fileNumber ? { fileNumber: String(fileNumber).trim() } : {}),
+      ...(storageLocation && String(storageLocation).trim() ? { storageLocation: String(storageLocation).trim() } : {}),
       ...(caseType ? { caseType: String(caseType).trim().toUpperCase() } : {}),
       caseStatus: caseStatus ? String(caseStatus).trim().toUpperCase() : 'PENDING',
       ...(rackLocation && typeof rackLocation === 'object'
@@ -338,15 +349,13 @@ export async function createFile(req, res, next) {
         caseNumber: file.caseNumber,
         cino: file.cino,
         fileNumber: file.fileNumber,
+        storageLocation: file.storageLocation,
         caseType: file.caseType,
         caseStatus: file.caseStatus,
         rackLocation: file.rackLocation,
         currentLocation: file.currentLocation,
       },
     });
-
-    // Link any cause list rows that were synced before this file existed
-    try { await relinkEntriesForFile(file); } catch (e) { console.error('[createFile] relink failed', e.message); }
 
     res.status(201).json(file);
   } catch (err) {
@@ -549,11 +558,6 @@ export async function bulkUploadFiles(req, res, next) {
       }
     }
 
-    if (insertedCount > 0) {
-      try { await rematchEntries({ username: req.user?.username || 'system' }); }
-      catch (e) { console.error('[bulkUploadFiles] rematch failed', e.message); }
-    }
-
     await AuditLog.create({
       userId: req.user?._id,
       username: req.user?.username || 'system',
@@ -701,6 +705,7 @@ export async function updateFile(req, res, next) {
       'caseNumber',
       'cino',
       'fileNumber',
+      'storageLocation',
       'caseType',
       'caseStatus',
     ];
@@ -716,7 +721,9 @@ export async function updateFile(req, res, next) {
         if (field === 'caseType' && typeof newVal === 'string') newVal = newVal.toUpperCase();
         if (field === 'caseStatus' && typeof newVal === 'string') newVal = newVal.toUpperCase();
 
-        if (newVal !== file[field]) {
+        // A file that never had a location and an empty box are the same thing
+        const currentVal = field === 'storageLocation' ? file[field] || '' : file[field];
+        if (newVal !== currentVal) {
           before[field] = file[field];
           after[field] = newVal;
           file[field] = newVal;
@@ -756,8 +763,6 @@ export async function updateFile(req, res, next) {
         after,
         reason: req.body.reason ? String(req.body.reason).trim() : '',
       });
-
-      try { await relinkEntriesForFile(file); } catch (e) { console.error('[updateFile] relink failed', e.message); }
     }
 
     res.json(file);

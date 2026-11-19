@@ -159,9 +159,6 @@ async function runSecurityTests() {
     { method: 'POST', path: '/users', body: { username: 'test', password: '123' }, name: 'POST /api/users (Create User)' },
     { method: 'PUT', path: '/users/6a9eec5f4c9bdbb71b1292fd', body: { active: false }, name: 'PUT /api/users/:id (Update User)' },
     { method: 'DELETE', path: '/users/6a9eec5f4c9bdbb71b1292fd', name: 'DELETE /api/users/:id (Delete User)' },
-    { method: 'POST', path: '/causelist/sync', body: { date: '2026-11-05' }, name: 'POST /api/causelist/sync (Admin Only Sync)' },
-    { method: 'POST', path: '/causelist/sync/6a9eec5f4c9bdbb71b1292fd/retry', name: 'POST /api/causelist/sync/:id/retry (Admin Only Retry)' },
-    { method: 'POST', path: '/causelist/rematch', body: {}, name: 'POST /api/causelist/rematch (Admin Only Rematch)' },
   ];
 
   for (const ep of adminEndpoints) {
@@ -199,15 +196,9 @@ async function runSecurityTests() {
   const duration = Date.now() - startTime;
   assert(all200, `12 concurrent report queries executed in ${duration}ms with 100% success`);
 
-  // Check 9: Cause List & Handheld Query Parameter Hardening (NoSQL Injection & Enum Whitelisting)
+  // Check 9: Query Parameter Hardening (NoSQL Injection & Enum Whitelisting)
   console.log('\n[Check 9] Query Parameter Hardening & NoSQL Injection Protection');
   const injectionTests = [
-    { url: '/causelist?status[$gt]=1', desc: 'CauseList invalid status object' },
-    { url: '/causelist?match[$ne]=1', desc: 'CauseList invalid match object' },
-    { url: '/causelist?status=INVALID_STATUS', desc: 'CauseList non-whitelisted status string' },
-    { url: '/causelist?match=INVALID_MATCH', desc: 'CauseList non-whitelisted match string' },
-    { url: '/handheld/causelist?q[$ne]=test', desc: 'Handheld invalid q object' },
-    { url: '/handheld/causelist?court[$gt]=1', desc: 'Handheld invalid court object' },
     { url: '/files?status=BOGUS_STATUS', desc: 'Files non-whitelisted status string' },
     { url: '/files?mapped[$gt]=0', desc: 'Files invalid mapped object' },
   ];
@@ -241,7 +232,7 @@ async function runSecurityTests() {
   fakeBody += `--${boundary}--\r\n`;
 
   const corruptUploadRes = await new Promise((resolve) => {
-    const parsed = new URL(`${API_BASE}/causelist/sync`);
+    const parsed = new URL(`${API_BASE}/files/bulk-upload`);
     const req = http.request(
       {
         hostname: parsed.hostname,

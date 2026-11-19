@@ -14,8 +14,6 @@ import Gates from './pages/Gates.jsx';
 import Users from './pages/Users.jsx';
 import Reports from './pages/Reports.jsx';
 import Search from './pages/Search.jsx';
-import CauseList from './pages/CauseList.jsx';
-import Handheld from './pages/Handheld.jsx';
 
 export default function App() {
   return (
@@ -46,8 +44,6 @@ export default function App() {
               }
             />
             <Route path="/court-room-status" element={<CourtRoomStatus />} />
-            <Route path="/cause-list" element={<CauseList />} />
-            <Route path="/handheld" element={<Handheld />} />
             <Route path="/movements" element={<MovementLog />} />
             <Route path="/gates" element={<Gates />} />
             <Route path="/reports" element={<Reports />} />

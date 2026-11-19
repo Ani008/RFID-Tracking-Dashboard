@@ -70,6 +70,10 @@ export default function FileDetailModal({ fileId, onClose, onFileUpdated }) {
                 <span className="mono" style={{ fontWeight: 600 }}>{data.file.rfidTag}</span>
               </div>
               <div>
+                <span className="modal-meta-label">Location</span>
+                <span style={{ fontWeight: 600 }}>{data.file.storageLocation || '—'}</span>
+              </div>
+              <div>
                 <span className="modal-meta-label">Last Movement</span>
                 <span>
                   {data.file.lastMovementAt ? new Date(data.file.lastMovementAt).toLocaleString() : '—'}

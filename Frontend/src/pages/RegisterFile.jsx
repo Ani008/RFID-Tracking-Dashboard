@@ -5,7 +5,7 @@ import { useScannerSocket } from '../hooks/useScannerSocket.js';
 import { normalizeRfidTag } from '../utils/rfid.js';
 import '../styles/forms.css';
 
-const EMPTY_FORM = { fileId: '', fileName: '', caseId: '', rfidTag: '' };
+const EMPTY_FORM = { fileId: '', fileName: '', caseId: '', storageLocation: '', rfidTag: '' };
 
 export default function RegisterFile() {
   const [form, setForm] = useState(EMPTY_FORM);
@@ -37,6 +37,7 @@ export default function RegisterFile() {
     try {
       const normalizedPayload = {
         ...form,
+        storageLocation: form.storageLocation.trim(),
         rfidTag: normalizeRfidTag(form.rfidTag),
       };
       const file = await createFile(normalizedPayload);
@@ -128,6 +129,17 @@ export default function RegisterFile() {
               placeholder="CASE-1002"
               required
             />
+          </div>
+          <div className="field">
+            <label htmlFor="storageLocation">Location</label>
+            <input
+              id="storageLocation"
+              value={form.storageLocation}
+              onChange={(e) => update('storageLocation', e.target.value)}
+              placeholder="Room 12, Rack A-3, Shelf 2"
+              maxLength={200}
+            />
+            <span className="field-hint">Where this file is kept. Shown on the handheld search screen.</span>
           </div>
           <div className="field full">
             <label htmlFor="rfidTag">RFID Tag (EPC)</label>

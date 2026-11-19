@@ -1,0 +1,4295 @@
+diff --git a/Backend/app.js b/Backend/app.js
+index 5168134..c0659bb 100644
+--- a/Backend/app.js
++++ b/Backend/app.js
+@@ -13,8 +13,6 @@ import movementRoutes from './routes/movementRoutes.js';
+ import fileRoutes from './routes/fileRoutes.js';
+ import gateRoutes from './routes/gateRoutes.js';
+ import reportRoutes from './routes/reportRoutes.js';
+-import causeListRoutes from './routes/causeListRoutes.js';
+-import handheldRoutes from './routes/handheldRoutes.js';
+ import publicRoutes from './routes/publicRoutes.js';
+ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+ 
+@@ -51,8 +49,6 @@ export function createApp() {
+   app.use('/api/files', fileRoutes);
+   app.use('/api/gates', gateRoutes);
+   app.use('/api/reports', reportRoutes);
+-  app.use('/api/causelist', causeListRoutes);
+-  app.use('/api/handheld', handheldRoutes);
+ 
+   return app;
+ }
+diff --git a/Backend/controllers/causeListController.js b/Backend/controllers/causeListController.js
+deleted file mode 100644
+index 4de3e38..0000000
+--- a/Backend/controllers/causeListController.js
++++ /dev/null
+@@ -1,276 +0,0 @@
+-import CauseListEntry from '../models/CauseListEntry.js';
+-import SyncRun from '../models/SyncRun.js';
+-import { runSync, rematchEntries, retryFailedRows } from '../services/causelist/syncService.js';
+-import { ManualUploadAdapter } from '../services/causelist/adapters/manualUploadAdapter.js';
+-import { HttpAdapter } from '../services/causelist/adapters/httpAdapter.js';
+-import File from '../models/File.js';
+-import { mergeCaseTypes } from '../utils/caseTypes.js';
+-
+-function escapeRegex(str) {
+-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+-}
+-
+-// POST /api/causelist/sync (Admin only)
+-export async function triggerSync(req, res, next) {
+-  try {
+-    const userId = req.user?._id;
+-    const username = req.user?.username || 'admin';
+-    let adapter;
+-    let date = req.body?.date ? String(req.body.date).trim() : '';
+-
+-    if (req.file) {
+-      // Upload-based sync
+-      adapter = new ManualUploadAdapter(req.file.buffer, req.file.originalname);
+-    } else {
+-      // HTTP / Stub adapter
+-      if (!date) {
+-        return res.status(400).json({ error: 'date (YYYY-MM-DD) or an uploaded file is required' });
+-      }
+-      adapter = new HttpAdapter();
+-      if (!adapter.isConfigured()) {
+-        return res.status(400).json({
+-          error: 'External Cause List API is not configured. Upload a cause list file (.csv, .xlsx, .json) to sync.',
+-        });
+-      }
+-    }
+-
+-    const syncRun = await runSync({
+-      date,
+-      adapter,
+-      userId,
+-      username,
+-      trigger: 'MANUAL',
+-    });
+-
+-    res.status(201).json(syncRun);
+-  } catch (err) {
+-    if (err.message.includes('already in progress')) {
+-      return res.status(409).json({ error: err.message });
+-    }
+-    next(err);
+-  }
+-}
+-
+-// POST /api/causelist/sync/:runId/retry (Admin only)
+-export async function retrySyncRun(req, res, next) {
+-  try {
+-    const { runId } = req.params;
+-    const result = await retryFailedRows({
+-      runId,
+-      userId: req.user?._id,
+-      username: req.user?.username || 'admin',
+-    });
+-    res.json(result);
+-  } catch (err) {
+-    next(err);
+-  }
+-}
+-
+-// POST /api/causelist/rematch (Admin only)
+-export async function triggerRematch(req, res, next) {
+-  try {
+-    const date = req.body?.date ? String(req.body.date).trim() : undefined;
+-    const result = await rematchEntries({
+-      date,
+-      userId: req.user?._id,
+-      username: req.user?.username || 'admin',
+-    });
+-    res.json(result);
+-  } catch (err) {
+-    next(err);
+-  }
+-}
+-
+-// GET /api/causelist/case-types (Admin & staff)
+-// Distinct case types actually present in the cause list and the file inventory.
+-export async function listCauseListCaseTypes(req, res, next) {
+-  try {
+-    const [fromEntries, fromFiles] = await Promise.all([
+-      CauseListEntry.distinct('caseType', { caseType: { $exists: true, $ne: '' } }),
+-      File.distinct('caseType', { caseType: { $exists: true, $ne: '' }, archived: { $ne: true } }),
+-    ]);
+-    res.json(mergeCaseTypes(fromEntries, fromFiles));
+-  } catch (err) {
+-    next(err);
+-  }
+-}
+-
+-// GET /api/causelist/sync-runs (Admin & staff)
+-export async function listSyncRuns(req, res, next) {
+-  try {
+-    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+-
+-    const [runs, total] = await Promise.all([
+-      SyncRun.find({}, { failures: 0 })
+-        .sort({ startedAt: -1 })
+-        .skip((page - 1) * limit)
+-        .limit(limit),
+-      SyncRun.countDocuments({}),
+-    ]);
+-
+-    res.json({
+-      items: runs,
+-      total,
+-      page,
+-      limit,
+-      totalPages: Math.max(1, Math.ceil(total / limit)),
+-    });
+-  } catch (err) {
+-    next(err);
+-  }
+-}
+-
+-// GET /api/causelist/sync-runs/:id (Admin & staff)
+-export async function getSyncRun(req, res, next) {
+-  try {
+-    const run = await SyncRun.findById(req.params.id);
+-    if (!run) return res.status(404).json({ error: `SyncRun "${req.params.id}" not found` });
+-    res.json(run);
+-  } catch (err) {
+-    next(err);
+-  }
+-}
+-
+-// GET /api/causelist?date=&court=&caseType=&status=&mapped=&match=&q=&page=&limit=
+-export async function listCauseListEntries(req, res, next) {
+-  try {
+-    const { date, court, caseType, status, mapped, match, q } = req.query;
+-    const filter = {};
+-    const andConditions = [];
+-
+-    if (date) {
+-      if (typeof date !== 'string') return res.status(400).json({ error: 'date must be a string' });
+-      andConditions.push({ causeListDate: date.trim() });
+-    }
+-    if (court) {
+-      if (typeof court !== 'string') return res.status(400).json({ error: 'court must be a string' });
+-      andConditions.push({ courtNumber: court.trim() });
+-    }
+-    if (caseType && caseType !== 'ALL') {
+-      if (typeof caseType !== 'string') return res.status(400).json({ error: 'caseType must be a string' });
+-      andConditions.push({ caseType: caseType.trim().toUpperCase() });
+-    }
+-    if (status && status !== 'ALL') {
+-      if (typeof status !== 'string') return res.status(400).json({ error: 'status must be a string' });
+-      const s = status.trim().toUpperCase();
+-      if (!['PENDING', 'DISPOSED'].includes(s)) {
+-        return res.status(400).json({ error: 'status must be ALL, PENDING, or DISPOSED' });
+-      }
+-      andConditions.push({ caseStatus: s });
+-    }
+-    if (match && match !== 'ALL') {
+-      if (typeof match !== 'string') return res.status(400).json({ error: 'match must be a string' });
+-      const m = match.trim().toUpperCase();
+-      if (!['MATCHED', 'UNMATCHED', 'AMBIGUOUS'].includes(m)) {
+-        return res.status(400).json({ error: 'match must be MATCHED, UNMATCHED, or AMBIGUOUS' });
+-      }
+-      andConditions.push({ matchStatus: m });
+-    }
+-    if (q) {
+-      if (typeof q !== 'string') return res.status(400).json({ error: 'q must be a string' });
+-      const trimmedQ = q.trim().slice(0, 50);
+-      if (trimmedQ.length > 0) {
+-        const re = new RegExp(escapeRegex(trimmedQ), 'i');
+-        andConditions.push({
+-          $or: [{ caseNumber: re }, { cino: re }, { bench: re }],
+-        });
+-      }
+-    }
+-
+-    // RFID mapping status (applied in the query so pagination and totals stay correct)
+-    if (mapped !== undefined && mapped !== '' && String(mapped).toLowerCase() !== 'all') {
+-      const wantMapped = String(mapped).toLowerCase() === 'true';
+-      const mappedFileIds = await File.distinct('_id', {
+-        rfidTag: { $exists: true, $nin: ['', null] },
+-        archived: { $ne: true },
+-      });
+-      andConditions.push(
+-        wantMapped
+-          ? { file: { $in: mappedFileIds } }
+-          : { $or: [{ file: null }, { file: { $nin: mappedFileIds } }] }
+-      );
+-    }
+-
+-    if (andConditions.length > 0) {
+-      filter.$and = andConditions;
+-    }
+-
+-    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 100);
+-
+-    let query = CauseListEntry.find(filter)
+-      .populate('file', 'fileId fileName caseId rfidTag currentLocation rackLocation caseStatus')
+-      .sort({ courtNumber: 1, serialNumber: 1 });
+-
+-    const [entries, total] = await Promise.all([
+-      query.skip((page - 1) * limit).limit(limit),
+-      CauseListEntry.countDocuments(filter),
+-    ]);
+-
+-    const items = entries;
+-
+-    res.json({
+-      items,
+-      total,
+-      page,
+-      limit,
+-      totalPages: Math.max(1, Math.ceil(total / limit)),
+-    });
+-  } catch (err) {
+-    next(err);
+-  }
+-}
+-
+-// GET /api/causelist/unmatched?date=&page=&limit=
+-export async function listUnmatchedEntries(req, res, next) {
+-  try {
+-    const { date } = req.query;
+-    const filter = {
+-      matchStatus: { $in: ['UNMATCHED', 'AMBIGUOUS'] },
+-    };
+-    if (date) filter.causeListDate = String(date).trim();
+-
+-    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 100);
+-
+-    const [items, total] = await Promise.all([
+-      CauseListEntry.find(filter)
+-        .sort({ causeListDate: -1, courtNumber: 1, serialNumber: 1 })
+-        .skip((page - 1) * limit)
+-        .limit(limit),
+-      CauseListEntry.countDocuments(filter),
+-    ]);
+-
+-    res.json({
+-      items,
+-      total,
+-      page,
+-      limit,
+-      totalPages: Math.max(1, Math.ceil(total / limit)),
+-    });
+-  } catch (err) {
+-    next(err);
+-  }
+-}
+-
+-// GET /api/causelist/history/:cino
+-export async function getCaseHistory(req, res, next) {
+-  try {
+-    const rawCino = String(req.params.cino || '').trim().toUpperCase();
+-    if (!rawCino) return res.status(400).json({ error: 'CINO is required' });
+-
+-    const entries = await CauseListEntry.find({ cino: rawCino })
+-      .populate('file', 'fileId fileName currentLocation rfidTag rackLocation')
+-      .sort({ causeListDate: -1, courtNumber: 1 });
+-
+-    res.json({
+-      cino: rawCino,
+-      totalAppearances: entries.length,
+-      history: entries,
+-    });
+-  } catch (err) {
+-    next(err);
+-  }
+-}
+-
+diff --git a/Backend/controllers/fileController.js b/Backend/controllers/fileController.js
+index 583157c..a91dd80 100644
+--- a/Backend/controllers/fileController.js
++++ b/Backend/controllers/fileController.js
+@@ -5,7 +5,6 @@ import MovementLog from '../models/MovementLog.js';
+ import AuditLog from '../models/AuditLog.js';
+ import { normalizeRfidTag } from '../utils/rfidHelper.js';
+ import { mergeCaseTypes } from '../utils/caseTypes.js';
+-import { relinkEntriesForFile, rematchEntries } from '../services/causelist/syncService.js';
+ 
+ const VALID_LOCATIONS = ['SHELF_ROOM', 'COURT_ROOM', 'IN_TRANSIT'];
+ const VALID_CASE_STATUSES = ['PENDING', 'DISPOSED'];
+@@ -345,9 +344,6 @@ export async function createFile(req, res, next) {
+       },
+     });
+ 
+-    // Link any cause list rows that were synced before this file existed
+-    try { await relinkEntriesForFile(file); } catch (e) { console.error('[createFile] relink failed', e.message); }
+-
+     res.status(201).json(file);
+   } catch (err) {
+     next(err);
+@@ -549,11 +545,6 @@ export async function bulkUploadFiles(req, res, next) {
+       }
+     }
+ 
+-    if (insertedCount > 0) {
+-      try { await rematchEntries({ username: req.user?.username || 'system' }); }
+-      catch (e) { console.error('[bulkUploadFiles] rematch failed', e.message); }
+-    }
+-
+     await AuditLog.create({
+       userId: req.user?._id,
+       username: req.user?.username || 'system',
+@@ -756,8 +747,6 @@ export async function updateFile(req, res, next) {
+         after,
+         reason: req.body.reason ? String(req.body.reason).trim() : '',
+       });
+-
+-      try { await relinkEntriesForFile(file); } catch (e) { console.error('[updateFile] relink failed', e.message); }
+     }
+ 
+     res.json(file);
+diff --git a/Backend/controllers/handheldController.js b/Backend/controllers/handheldController.js
+deleted file mode 100644
+index f041156..0000000
+--- a/Backend/controllers/handheldController.js
++++ /dev/null
+@@ -1,107 +0,0 @@
+-import CauseListEntry from '../models/CauseListEntry.js';
+-import File from '../models/File.js';
+-
+-// IST date helper: returns "YYYY-MM-DD" for today in Asia/Kolkata
+-function todayIST() {
+-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+-}
+-
+-function escapeRegex(str) {
+-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+-}
+-
+-/**
+- * GET /api/handheld/causelist
+- * Query params: date (default=today IST), q, caseType, court, limit (max 100)
+- * Returns per item: causeListDate, courtNumber, serialNumber, caseNumber, cino,
+- *                   caseType, rfidMapped, rfidTag, rackLocation, availability, fileId, _id
+- */
+-export async function getHandheldCauseList(req, res, next) {
+-  try {
+-    const { date, q, caseType, court } = req.query;
+-
+-    // Validate & sanitize
+-    if (date !== undefined && typeof date !== 'string') {
+-      return res.status(400).json({ error: 'date must be a string' });
+-    }
+-    if (q !== undefined && typeof q !== 'string') {
+-      return res.status(400).json({ error: 'q must be a string' });
+-    }
+-    if (caseType !== undefined && typeof caseType !== 'string') {
+-      return res.status(400).json({ error: 'caseType must be a string' });
+-    }
+-    if (court !== undefined && typeof court !== 'string') {
+-      return res.status(400).json({ error: 'court must be a string' });
+-    }
+-
+-    const targetDate = date ? String(date).trim() : todayIST();
+-    const rawLimit = parseInt(req.query.limit, 10);
+-    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : 100;
+-
+-    const filter = { causeListDate: targetDate };
+-
+-    if (court) {
+-      filter.courtNumber = String(court).trim();
+-    }
+-
+-    if (caseType && caseType !== 'ALL') {
+-      filter.caseType = String(caseType).trim().toUpperCase();
+-    }
+-
+-    if (q) {
+-      const trimmedQ = String(q).trim().slice(0, 50);
+-      if (trimmedQ.length > 0) {
+-        const re = new RegExp(escapeRegex(trimmedQ), 'i');
+-        filter.$or = [{ caseNumber: re }, { cino: re }];
+-      }
+-    }
+-
+-    const entries = await CauseListEntry.find(filter)
+-      .populate('file', 'fileId fileName rfidTag currentLocation rackLocation caseStatus')
+-      .sort({ courtNumber: 1, serialNumber: 1 })
+-      .limit(limit)
+-      .lean();
+-
+-    // Compute availability per entry
+-    const items = entries.map((e) => {
+-      const file = e.file;
+-      let availability;
+-
+-      if (!file) {
+-        availability = 'NO_FILE';
+-      } else if (!file.rfidTag || !file.rfidTag.trim()) {
+-        availability = 'NO_RFID';
+-      } else if (!file.rackLocation || !file.rackLocation.rack) {
+-        availability = 'NO_RACK';
+-      } else {
+-        availability = 'LOCATED';
+-      }
+-
+-      return {
+-        _id: e._id,
+-        causeListDate: e.causeListDate,
+-        courtNumber: e.courtNumber,
+-        serialNumber: e.serialNumber,
+-        caseNumber: e.caseNumber || null,
+-        cino: e.cino || null,
+-        caseType: e.caseType || null,
+-        rfidMapped: Boolean(file?.rfidTag?.trim()),
+-        rfidTag: file?.rfidTag || null,
+-        rackLocation: file?.rackLocation || null,
+-        availability,
+-        fileId: file?._id || null,
+-        currentLocation: file?.currentLocation || null,
+-      };
+-    });
+-
+-    res.json({
+-      date: targetDate,
+-      total: items.length,
+-      limit,
+-      items,
+-    });
+-  } catch (err) {
+-    next(err);
+-  }
+-}
+-
+diff --git a/Backend/models/CauseListEntry.js b/Backend/models/CauseListEntry.js
+deleted file mode 100644
+index 8396fa4..0000000
+--- a/Backend/models/CauseListEntry.js
++++ /dev/null
+@@ -1,104 +0,0 @@
+-import mongoose from 'mongoose';
+-
+-const { Schema } = mongoose;
+-
+-const causeListEntrySchema = new Schema(
+-  {
+-    causeListDate: {
+-      type: String,
+-      required: true,
+-      trim: true, // "YYYY-MM-DD"
+-    },
+-    courtNumber: {
+-      type: String,
+-      required: true,
+-      trim: true,
+-    },
+-    bench: {
+-      type: String,
+-      trim: true,
+-      default: '',
+-    },
+-    serialNumber: {
+-      type: Number,
+-      required: true,
+-    },
+-    caseNumber: {
+-      type: String,
+-      trim: true,
+-      default: '',
+-    },
+-    cino: {
+-      type: String,
+-      trim: true,
+-      uppercase: true,
+-      default: '',
+-    },
+-    caseType: {
+-      type: String,
+-      trim: true,
+-      uppercase: true,
+-      default: '',
+-    },
+-    caseStatus: {
+-      type: String,
+-      enum: ['PENDING', 'DISPOSED', ''],
+-      default: '',
+-    },
+-    dedupeKey: {
+-      type: String,
+-      required: true,
+-      trim: true,
+-    },
+-    file: {
+-      type: Schema.Types.ObjectId,
+-      ref: 'File',
+-      default: null,
+-    },
+-    matchStatus: {
+-      type: String,
+-      enum: ['MATCHED', 'UNMATCHED', 'AMBIGUOUS'],
+-      required: true,
+-      default: 'UNMATCHED',
+-    },
+-    matchReason: {
+-      type: String,
+-      default: '',
+-    },
+-    syncRunId: {
+-      type: Schema.Types.ObjectId,
+-      ref: 'SyncRun',
+-      default: null,
+-    },
+-    firstSeenAt: {
+-      type: Date,
+-      default: Date.now,
+-    },
+-    lastSyncedAt: {
+-      type: Date,
+-      default: Date.now,
+-    },
+-  },
+-  {
+-    timestamps: true,
+-    toJSON: { virtuals: true },
+-    toObject: { virtuals: true },
+-  }
+-);
+-
+-// Unique index: Each case appearance on a specific date in a specific court is unique
+-causeListEntrySchema.index(
+-  { causeListDate: 1, courtNumber: 1, dedupeKey: 1 },
+-  { unique: true }
+-);
+-
+-// Query indexes
+-causeListEntrySchema.index({ causeListDate: 1, courtNumber: 1, serialNumber: 1 });
+-causeListEntrySchema.index({ cino: 1 });
+-causeListEntrySchema.index({ caseNumber: 1 });
+-causeListEntrySchema.index({ matchStatus: 1 });
+-causeListEntrySchema.index({ file: 1 });
+-causeListEntrySchema.index({ syncRunId: 1 });
+-
+-export default mongoose.model('CauseListEntry', causeListEntrySchema);
+-
+diff --git a/Backend/models/SyncRun.js b/Backend/models/SyncRun.js
+deleted file mode 100644
+index 5f06af0..0000000
+--- a/Backend/models/SyncRun.js
++++ /dev/null
+@@ -1,67 +0,0 @@
+-import mongoose from 'mongoose';
+-
+-const { Schema } = mongoose;
+-
+-const failureSchema = new Schema(
+-  {
+-    rowIndex: { type: Number },
+-    rawRow: { type: Schema.Types.Mixed },
+-    error: { type: String, required: true },
+-    retryable: { type: Boolean, default: true },
+-  },
+-  { _id: false }
+-);
+-
+-const syncRunSchema = new Schema(
+-  {
+-    trigger: {
+-      type: String,
+-      enum: ['MANUAL', 'SCHEDULED'],
+-      default: 'MANUAL',
+-    },
+-    requestedBy: {
+-      type: Schema.Types.ObjectId,
+-      ref: 'User',
+-      default: null,
+-    },
+-    username: {
+-      type: String,
+-      default: 'system',
+-    },
+-    params: {
+-      type: Schema.Types.Mixed,
+-      default: {},
+-    },
+-    startedAt: {
+-      type: Date,
+-      default: Date.now,
+-    },
+-    finishedAt: {
+-      type: Date,
+-    },
+-    status: {
+-      type: String,
+-      enum: ['RUNNING', 'SUCCESS', 'PARTIAL', 'FAILED'],
+-      default: 'RUNNING',
+-    },
+-    counts: {
+-      received: { type: Number, default: 0 },
+-      inserted: { type: Number, default: 0 },
+-      updated: { type: Number, default: 0 },
+-      matched: { type: Number, default: 0 },
+-      unmatched: { type: Number, default: 0 },
+-      ambiguous: { type: Number, default: 0 },
+-      failed: { type: Number, default: 0 },
+-    },
+-    failures: [failureSchema],
+-  },
+-  {
+-    timestamps: true,
+-  }
+-);
+-
+-syncRunSchema.index({ startedAt: -1 });
+-syncRunSchema.index({ status: 1 });
+-
+-export default mongoose.model('SyncRun', syncRunSchema);
+-
+diff --git a/Backend/package.json b/Backend/package.json
+index 6ba0403..c684282 100644
+--- a/Backend/package.json
++++ b/Backend/package.json
+@@ -11,8 +11,6 @@
+     "migrate:phase1": "node scripts/migrate-phase1.js",
+     "test:phase1": "node scripts/test_phase1.js",
+     "test:phase2": "node scripts/test_phase2.js",
+-    "test:phase4": "node scripts/test_phase4.js",
+-    "test:phase6": "node scripts/test_phase6.js",
+     "test:load": "node scripts/load_check.js",
+     "test:security": "node scripts/security_test.js",
+     "test:e2e": "node scripts/e2e_full_test.js"
+diff --git a/Backend/routes/causeListRoutes.js b/Backend/routes/causeListRoutes.js
+deleted file mode 100644
+index aed116d..0000000
+--- a/Backend/routes/causeListRoutes.js
++++ /dev/null
+@@ -1,44 +0,0 @@
+-import express from 'express';
+-import multer from 'multer';
+-import {
+-  triggerSync,
+-  retrySyncRun,
+-  triggerRematch,
+-  listSyncRuns,
+-  getSyncRun,
+-  listCauseListEntries,
+-  listUnmatchedEntries,
+-  getCaseHistory,
+-  listCauseListCaseTypes,
+-} from '../controllers/causeListController.js';
+-import { requireAuth, requireRole } from '../middleware/auth.js';
+-
+-const router = express.Router();
+-
+-const upload = multer({
+-  storage: multer.memoryStorage(),
+-  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+-  fileFilter: (req, file, cb) => {
+-    const isAllowedExt = /\.(xlsx|xls|csv|json)$/i.test(file.originalname || '');
+-    if (isAllowedExt) return cb(null, true);
+-    cb(new Error('Only .xlsx, .xls, .csv, or .json files are supported'));
+-  },
+-});
+-
+-router.use(requireAuth);
+-
+-// Admin-only operations
+-router.post('/sync', requireRole('admin'), upload.single('file'), triggerSync);
+-router.post('/sync/:runId/retry', requireRole('admin'), retrySyncRun);
+-router.post('/rematch', requireRole('admin'), triggerRematch);
+-
+-// Admin & Staff read operations
+-router.get('/case-types', listCauseListCaseTypes);
+-router.get('/sync-runs', listSyncRuns);
+-router.get('/sync-runs/:id', getSyncRun);
+-router.get('/unmatched', listUnmatchedEntries);
+-router.get('/history/:cino', getCaseHistory);
+-router.get('/', listCauseListEntries);
+-
+-export default router;
+-
+diff --git a/Backend/routes/handheldRoutes.js b/Backend/routes/handheldRoutes.js
+deleted file mode 100644
+index d4d3011..0000000
+--- a/Backend/routes/handheldRoutes.js
++++ /dev/null
+@@ -1,13 +0,0 @@
+-import express from 'express';
+-import { getHandheldCauseList } from '../controllers/handheldController.js';
+-import { requireAuth } from '../middleware/auth.js';
+-
+-const router = express.Router();
+-
+-router.use(requireAuth);
+-
+-// GET /api/handheld/causelist (admin + staff)
+-router.get('/causelist', getHandheldCauseList);
+-
+-export default router;
+-
+diff --git a/Backend/scripts/e2e_full_test.js b/Backend/scripts/e2e_full_test.js
+index 10df4ef..42fac71 100644
+--- a/Backend/scripts/e2e_full_test.js
++++ b/Backend/scripts/e2e_full_test.js
+@@ -354,121 +354,6 @@ async function runFullTestSuite() {
+   });
+   assert(delClerk.status === 200, 'Admin deleted test user account');
+ 
+-  // ==========================================
+-  // SECTION 8: FULL ENHANCEMENT WORKFLOW (PHASES 1-6)
+-  // ==========================================
+-  console.log('\n▶ [8] CAUSE LIST, FILTERS, REMATCH, HANDHELD & RACK UPDATE FULL FLOW');
+-
+-  const randSuffix = Math.floor(Math.random() * 90000) + 10000;
+-  const e2eFileId = `AHC-E2E-${randSuffix}`;
+-  const e2eCino = `ALLHC01${randSuffix}99`;
+-  const e2eDate = '2026-12-15';
+-  const e2eTag = `E28068EA${randSuffix}FF`;
+-
+-  // 1. Create file with NO rfidTag (Pending Mapping)
+-  const createUnmapped = await request('/files', {
+-    method: 'POST',
+-    headers: { Authorization: `Bearer ${adminToken}` },
+-    body: JSON.stringify({
+-      fileId: e2eFileId,
+-      fileName: 'State of UP vs Ram Kumar',
+-      caseId: `CASE-${randSuffix}`,
+-      caseNumber: `WP/${randSuffix}/2026`,
+-      caseType: 'BAIL',
+-      caseStatus: 'PENDING',
+-    }),
+-  });
+-  assert(createUnmapped.status === 201, `Created unmapped file ${e2eFileId} without RFID tag`);
+-  assert(createUnmapped.data.rfidMapped === false, 'Virtual rfidMapped is false for untagged file');
+-
+-  // 2. Verify file appears in pending-mapping endpoint
+-  const pendingRes = await request(`/files/pending-mapping?q=${randSuffix}`, {
+-    headers: { Authorization: `Bearer ${staffToken}` },
+-  });
+-  assert(
+-    pendingRes.status === 200 && pendingRes.data.items.some((f) => f.fileId === e2eFileId),
+-    'Untagged file is listed in GET /api/files/pending-mapping'
+-  );
+-
+-  // 3. Verify combined filters on /api/files
+-  const filterRes = await request(`/files?mapped=false&caseType=BAIL&status=PENDING&q=${randSuffix}`, {
+-    headers: { Authorization: `Bearer ${staffToken}` },
+-  });
+-  assert(filterRes.status === 200 && filterRes.data.total === 1, 'Combined filters (mapped=false, caseType, status, q) match file');
+-
+-  // 4. Sync a cause list containing an entry with CINO e2eCino
+-  const boundary = '----WebKitFormBoundaryE2E' + randSuffix;
+-  let csvPayload = '';
+-  csvPayload += `--${boundary}\r\n`;
+-  csvPayload += `Content-Disposition: form-data; name="date"\r\n\r\n${e2eDate}\r\n`;
+-  csvPayload += `--${boundary}\r\n`;
+-  csvPayload += `Content-Disposition: form-data; name="file"; filename="e2e_causelist.csv"\r\n`;
+-  csvPayload += `Content-Type: text/csv\r\n\r\n`;
+-  csvPayload += `Date,Court,Serial,CaseNo,CINO,Bench,Type,Status\r\n`;
+-  csvPayload += `${e2eDate},5,1,WP/${randSuffix}/2026,${e2eCino},Court 5 Hon Justice,BAIL,PENDING\r\n`;
+-  csvPayload += `--${boundary}--\r\n`;
+-
+-  const syncRes = await fetch(`${API_BASE}/causelist/sync`, {
+-    method: 'POST',
+-    headers: {
+-      Authorization: `Bearer ${adminToken}`,
+-      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+-    },
+-    body: csvPayload,
+-  });
+-  const syncJson = await syncRes.json();
+-  assert(syncRes.status === 201, 'Cause list CSV synced successfully');
+-
+-  // 5. Check unmatched list (file has no CINO yet, so it was unmatched or matched by caseNumber)
+-  const unmatchedRes = await request(`/causelist/unmatched?date=${e2eDate}`, {
+-    headers: { Authorization: `Bearer ${staffToken}` },
+-  });
+-  assert(unmatchedRes.status === 200, 'Fetched unmatched cause list entries');
+-
+-  // 6. Admin assigns CINO and pairs RFID tag to file
+-  const updateRes = await request(`/files/${e2eFileId}`, {
+-    method: 'PUT',
+-    headers: { Authorization: `Bearer ${adminToken}` },
+-    body: JSON.stringify({
+-      cino: e2eCino,
+-      rfidTag: e2eTag,
+-    }),
+-  });
+-  assert(updateRes.status === 200, `Updated file with CINO ${e2eCino} and RFID tag`);
+-  assert(updateRes.data.rfidMapped === true, 'File is now rfidMapped: true');
+-
+-  // 7. Trigger re-match
+-  const rematchRes = await request('/causelist/rematch', {
+-    method: 'POST',
+-    headers: { Authorization: `Bearer ${adminToken}` },
+-    body: JSON.stringify({ date: e2eDate }),
+-  });
+-  assert(rematchRes.status === 200, 'Rematch triggered successfully');
+-
+-  // 8. Staff updates Rack Location
+-  const rackRes = await request(`/files/${e2eFileId}/rack`, {
+-    method: 'PUT',
+-    headers: { Authorization: `Bearer ${staffToken}` },
+-    body: JSON.stringify({ rack: 'COURT-BAY-3', shelf: 'TIER-2' }),
+-  });
+-  assert(rackRes.status === 200, 'Staff updated rack location');
+-  assert(rackRes.data.rackLocation?.rack === 'COURT-BAY-3', 'Rack set to COURT-BAY-3');
+-
+-  // 9. Query Handheld Cause List API
+-  const hhRes = await request(`/handheld/causelist?date=${e2eDate}&q=${e2eCino}`, {
+-    headers: { Authorization: `Bearer ${staffToken}` },
+-  });
+-  assert(hhRes.status === 200 && hhRes.data.total === 1, 'Handheld search finds case entry');
+-  const hhItem = hhRes.data.items[0];
+-  assert(hhItem.availability === 'LOCATED', 'Handheld entry availability is LOCATED (tag + rack)');
+-  assert(hhItem.rackLocation?.rack === 'COURT-BAY-3', 'Handheld returns updated rack');
+-
+-  // 10. Cleanup e2e file
+-  await request(`/files/${e2eFileId}`, {
+-    method: 'DELETE',
+-    headers: { Authorization: `Bearer ${adminToken}` },
+-  });
+-
+   console.log('\n================================================================');
+   console.log(`📊 END-TO-END TEST SUITE RESULTS: ${passed} PASSED | ${failed} FAILED`);
+   console.log('================================================================');
+diff --git a/Backend/scripts/load_check.js b/Backend/scripts/load_check.js
+index 0869569..67b9db2 100644
+--- a/Backend/scripts/load_check.js
++++ b/Backend/scripts/load_check.js
+@@ -1,13 +1,12 @@
+ import 'dotenv/config';
+ import mongoose from 'mongoose';
+ import File from '../models/File.js';
+-import CauseListEntry from '../models/CauseListEntry.js';
+ 
+ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/rfid-tracker';
+ 
+ async function runLoadCheck() {
+   console.log('================================================================');
+-  console.log('⚡ RUNNING PERFORMANCE & LOAD BENCHMARK (5,000 FILES + 2,000 CAUSELIST ROWS)');
++  console.log('⚡ RUNNING PERFORMANCE & LOAD BENCHMARK (5,000 FILES)');
+   console.log('================================================================\n');
+ 
+   await mongoose.connect(MONGODB_URI);
+@@ -15,10 +14,8 @@ async function runLoadCheck() {
+ 
+   // Verify indexes
+   await File.syncIndexes();
+-  await CauseListEntry.syncIndexes();
+ 
+   const LOAD_PREFIX = 'BENCH_LOAD_';
+-  const BATCH_DATE = '2026-11-20';
+ 
+   console.log('Generating 5,000 synthetic files...');
+   const filesToInsert = [];
+@@ -50,29 +47,6 @@ async function runLoadCheck() {
+   await File.insertMany(filesToInsert, { ordered: false });
+   console.log(`✓ 5,000 files inserted in ${Date.now() - fileInsertStart}ms`);
+ 
+-  console.log('Generating 2,000 synthetic cause-list entries...');
+-  const entriesToInsert = [];
+-  for (let i = 1; i <= 2000; i++) {
+-    const court = String((i % 30) + 1);
+-    const serial = Math.floor(i / 30) + 1;
+-    entriesToInsert.push({
+-      causeListDate: BATCH_DATE,
+-      courtNumber: court,
+-      bench: `Court ${court} Bench`,
+-      serialNumber: serial,
+-      caseNumber: `WP/BENCH/${i}/2026`,
+-      cino: `${LOAD_PREFIX}CINO_${i}`,
+-      dedupeKey: `${LOAD_PREFIX}CINO_${i}`,
+-      caseType: caseTypes[i % caseTypes.length],
+-      caseStatus: caseStatuses[i % caseStatuses.length],
+-      matchStatus: 'MATCHED',
+-    });
+-  }
+-
+-  const clInsertStart = Date.now();
+-  await CauseListEntry.insertMany(entriesToInsert, { ordered: false });
+-  console.log(`✓ 2,000 cause-list entries inserted in ${Date.now() - clInsertStart}ms\n`);
+-
+   // ─── Query 1: Filtered Files by compound {caseType, caseStatus} + paging ────
+   console.log('--- [Query 1] File search: caseType="BAIL" & caseStatus="PENDING" (compound index) ---');
+   const q1Start = Date.now();
+@@ -113,38 +87,10 @@ async function runLoadCheck() {
+   console.log(`  Returned: ${q3Stats.nReturned}`);
+   if (q3Time > 500) throw new Error(`Query 3 exceeded 500ms limit: ${q3Time}ms`);
+ 
+-  // ─── Query 4: Cause List by Date & Court (compound index) ───────────────────
+-  console.log('\n--- [Query 4] Cause List for date & court sorted by serial ---');
+-  const q4Start = Date.now();
+-  const q4Explain = await CauseListEntry.find({ causeListDate: BATCH_DATE, courtNumber: '5' })
+-    .sort({ serialNumber: 1 })
+-    .limit(50)
+-    .explain('executionStats');
+-  const q4Time = Date.now() - q4Start;
+-  const q4Stats = q4Explain.executionStats;
+-  console.log(`  Execution Time: ${q4Time}ms (MongoDB execution: ${q4Stats.executionTimeMillis}ms)`);
+-  console.log(`  Stage: ${q4Stats.executionStages.stage}`);
+-  console.log(`  Total Docs Examined: ${q4Stats.totalDocsExamined}, Returned: ${q4Stats.nReturned}`);
+-  if (q4Time > 500) throw new Error(`Query 4 exceeded 500ms limit: ${q4Time}ms`);
+-
+-  // ─── Query 5: Handheld Cause List Lookup (date sorted by court and serial) ──
+-  console.log('\n--- [Query 5] Handheld Cause List Lookup for date (up to 100 rows) ---');
+-  const q5Start = Date.now();
+-  const q5Explain = await CauseListEntry.find({ causeListDate: BATCH_DATE })
+-    .sort({ courtNumber: 1, serialNumber: 1 })
+-    .limit(100)
+-    .explain('executionStats');
+-  const q5Time = Date.now() - q5Start;
+-  const q5Stats = q5Explain.executionStats;
+-  console.log(`  Execution Time: ${q5Time}ms (MongoDB execution: ${q5Stats.executionTimeMillis}ms)`);
+-  console.log(`  Total Docs Examined: ${q5Stats.totalDocsExamined}, Returned: ${q5Stats.nReturned}`);
+-  if (q5Time > 500) throw new Error(`Query 5 exceeded 500ms limit: ${q5Time}ms`);
+-
+   // ─── Cleanup benchmark data ────────────────────────────────────────────────
+   console.log('\nCleaning up benchmark datasets...');
+   const delFiles = await File.deleteMany({ fileId: new RegExp(`^${LOAD_PREFIX}`) });
+-  const delEntries = await CauseListEntry.deleteMany({ causeListDate: BATCH_DATE });
+-  console.log(`✓ Deleted ${delFiles.deletedCount} files and ${delEntries.deletedCount} cause list entries`);
++  console.log(`✓ Deleted ${delFiles.deletedCount} files`);
+ 
+   await mongoose.disconnect();
+   console.log('\n================================================================');
+diff --git a/Backend/scripts/purge-demo-data.js b/Backend/scripts/purge-demo-data.js
+index 9e99241..aa7f8b4 100644
+--- a/Backend/scripts/purge-demo-data.js
++++ b/Backend/scripts/purge-demo-data.js
+@@ -1,13 +1,10 @@
+ import 'dotenv/config';
+ import mongoose from 'mongoose';
+ import File from '../models/File.js';
+-import CauseListEntry from '../models/CauseListEntry.js';
+-import SyncRun from '../models/SyncRun.js';
+ import MovementLog from '../models/MovementLog.js';
+ 
+ /**
+- * One-time cleanup of the demo data that older versions of seed.js and the
+- * cause-list HTTP stub inserted.
++ * One-time cleanup of the demo data that older versions of seed.js inserted.
+  *
+  *   node scripts/purge-demo-data.js            -> DRY RUN (only reports)
+  *   node scripts/purge-demo-data.js --apply    -> actually deletes
+@@ -40,19 +37,11 @@ async function run() {
+   const demoFileIds = demoFiles.map((f) => f.fileId);
+   const demoFileObjectIds = demoFiles.map((f) => f._id);
+ 
+-  // 2. Cause list entries created from the stub or linked to demo files
+-  const demoEntries = await CauseListEntry.find({
+-    $or: [{ cino: { $in: DEMO_CINOS } }, { file: { $in: demoFileObjectIds } }],
+-  }).select('syncRunId');
+-  const entryIds = demoEntries.map((e) => e._id);
+-  const touchedRunIds = [...new Set(demoEntries.map((e) => String(e.syncRunId)).filter(Boolean))];
+-
+-  // 3. Movement logs for demo files
++  // 2. Movement logs for demo files
+   const movementCount = await MovementLog.countDocuments({ fileId: { $in: demoFileIds } });
+ 
+   console.log(`[purge] demo case files found:        ${demoFiles.length}`);
+   demoFiles.forEach((f) => console.log(`          - ${f.fileId}  ${f.caseNumber}  ${f.cino}`));
+-  console.log(`[purge] cause list entries found:     ${demoEntries.length}`);
+   console.log(`[purge] movement logs found:          ${movementCount}`);
+ 
+   if (!APPLY) {
+@@ -61,22 +50,10 @@ async function run() {
+     return;
+   }
+ 
+-  const entriesRes = await CauseListEntry.deleteMany({ _id: { $in: entryIds } });
+   const movesRes = await MovementLog.deleteMany({ fileId: { $in: demoFileIds } });
+   const filesRes = await File.deleteMany({ _id: { $in: demoFileObjectIds } });
+ 
+-  // 4. Sync runs that only produced demo entries (no remaining entries reference them)
+-  let runsDeleted = 0;
+-  for (const runId of touchedRunIds) {
+-    const remaining = await CauseListEntry.countDocuments({ syncRunId: runId });
+-    if (remaining === 0) {
+-      await SyncRun.deleteOne({ _id: runId });
+-      runsDeleted++;
+-    }
+-  }
+-
+-  console.log(`[purge] deleted: ${filesRes.deletedCount} files, ${entriesRes.deletedCount} cause list entries, ` +
+-    `${movesRes.deletedCount} movement logs, ${runsDeleted} sync runs`);
++  console.log(`[purge] deleted: ${filesRes.deletedCount} files, ${movesRes.deletedCount} movement logs`);
+ 
+   await mongoose.disconnect();
+   console.log('[purge] done');
+diff --git a/Backend/scripts/security_test.js b/Backend/scripts/security_test.js
+index 419f659..92f3171 100644
+--- a/Backend/scripts/security_test.js
++++ b/Backend/scripts/security_test.js
+@@ -159,9 +159,6 @@ async function runSecurityTests() {
+     { method: 'POST', path: '/users', body: { username: 'test', password: '123' }, name: 'POST /api/users (Create User)' },
+     { method: 'PUT', path: '/users/6a9eec5f4c9bdbb71b1292fd', body: { active: false }, name: 'PUT /api/users/:id (Update User)' },
+     { method: 'DELETE', path: '/users/6a9eec5f4c9bdbb71b1292fd', name: 'DELETE /api/users/:id (Delete User)' },
+-    { method: 'POST', path: '/causelist/sync', body: { date: '2026-11-05' }, name: 'POST /api/causelist/sync (Admin Only Sync)' },
+-    { method: 'POST', path: '/causelist/sync/6a9eec5f4c9bdbb71b1292fd/retry', name: 'POST /api/causelist/sync/:id/retry (Admin Only Retry)' },
+-    { method: 'POST', path: '/causelist/rematch', body: {}, name: 'POST /api/causelist/rematch (Admin Only Rematch)' },
+   ];
+ 
+   for (const ep of adminEndpoints) {
+@@ -199,15 +196,9 @@ async function runSecurityTests() {
+   const duration = Date.now() - startTime;
+   assert(all200, `12 concurrent report queries executed in ${duration}ms with 100% success`);
+ 
+-  // Check 9: Cause List & Handheld Query Parameter Hardening (NoSQL Injection & Enum Whitelisting)
++  // Check 9: Query Parameter Hardening (NoSQL Injection & Enum Whitelisting)
+   console.log('\n[Check 9] Query Parameter Hardening & NoSQL Injection Protection');
+   const injectionTests = [
+-    { url: '/causelist?status[$gt]=1', desc: 'CauseList invalid status object' },
+-    { url: '/causelist?match[$ne]=1', desc: 'CauseList invalid match object' },
+-    { url: '/causelist?status=INVALID_STATUS', desc: 'CauseList non-whitelisted status string' },
+-    { url: '/causelist?match=INVALID_MATCH', desc: 'CauseList non-whitelisted match string' },
+-    { url: '/handheld/causelist?q[$ne]=test', desc: 'Handheld invalid q object' },
+-    { url: '/handheld/causelist?court[$gt]=1', desc: 'Handheld invalid court object' },
+     { url: '/files?status=BOGUS_STATUS', desc: 'Files non-whitelisted status string' },
+     { url: '/files?mapped[$gt]=0', desc: 'Files invalid mapped object' },
+   ];
+@@ -241,7 +232,7 @@ async function runSecurityTests() {
+   fakeBody += `--${boundary}--\r\n`;
+ 
+   const corruptUploadRes = await new Promise((resolve) => {
+-    const parsed = new URL(`${API_BASE}/causelist/sync`);
++    const parsed = new URL(`${API_BASE}/files/bulk-upload`);
+     const req = http.request(
+       {
+         hostname: parsed.hostname,
+diff --git a/Backend/scripts/test_phase4.js b/Backend/scripts/test_phase4.js
+deleted file mode 100644
+index 4c169ee..0000000
+--- a/Backend/scripts/test_phase4.js
++++ /dev/null
+@@ -1,249 +0,0 @@
+-import 'dotenv/config';
+-import mongoose from 'mongoose';
+-import File from '../models/File.js';
+-import CauseListEntry from '../models/CauseListEntry.js';
+-import SyncRun from '../models/SyncRun.js';
+-
+-const API_BASE = 'http://localhost:4000/api';
+-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/rfid-tracker';
+-
+-async function request(path, options = {}) {
+-  const url = `${API_BASE}${path}`;
+-  const res = await fetch(url, {
+-    ...options,
+-    headers: {
+-      'Content-Type': 'application/json',
+-      ...(options.headers || {}),
+-    },
+-  });
+-  let data;
+-  const contentType = res.headers.get('content-type') || '';
+-  if (contentType.includes('application/json')) {
+-    data = await res.json();
+-  } else {
+-    data = await res.text();
+-  }
+-  return { status: res.status, headers: res.headers, data };
+-}
+-
+-let passed = 0;
+-let failed = 0;
+-
+-function assert(condition, name, details = '') {
+-  if (condition) {
+-    console.log(`  ✅ [PASS] ${name}`);
+-    passed++;
+-  } else {
+-    console.error(`  ❌ [FAIL] ${name} ${details ? `(${details})` : ''}`);
+-    failed++;
+-  }
+-}
+-
+-async function runPhase4Tests() {
+-  console.log('=====================================================');
+-  console.log('🧪 RUNNING PHASE 4 CAUSE LIST & SYNC TEST SUITE');
+-  console.log('=====================================================\n');
+-
+-  await mongoose.connect(MONGODB_URI);
+-  await CauseListEntry.syncIndexes();
+-  await SyncRun.syncIndexes();
+-
+-  // Step 0: Get tokens
+-  const adminLogin = await request('/auth/login', {
+-    method: 'POST',
+-    body: JSON.stringify({ username: 'admin', password: 'Admin@123' }),
+-  });
+-  const adminToken = adminLogin.data.token;
+-  const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+-
+-  const staffLogin = await request('/auth/login', {
+-    method: 'POST',
+-    body: JSON.stringify({ username: 'staff', password: 'Staff@123' }),
+-  });
+-  const staffToken = staffLogin.data.token;
+-  const staffHeaders = { Authorization: `Bearer ${staffToken}` };
+-
+-  // 1. Staff RBAC checks (Staff cannot sync, retry, rematch)
+-  console.log('▶ [1] RBAC Protection on Cause List Operations');
+-  const staffSync = await request('/causelist/sync', {
+-    method: 'POST',
+-    headers: staffHeaders,
+-    body: JSON.stringify({ date: '2026-11-10' }),
+-  });
+-  assert(staffSync.status === 403, 'Staff blocked from triggering sync (403 Forbidden)');
+-
+-  const staffRetry = await request('/causelist/sync/dummy-id/retry', {
+-    method: 'POST',
+-    headers: staffHeaders,
+-  });
+-  assert(staffRetry.status === 403, 'Staff blocked from triggering retry (403 Forbidden)');
+-
+-  const staffRematch = await request('/causelist/rematch', {
+-    method: 'POST',
+-    headers: staffHeaders,
+-  });
+-  assert(staffRematch.status === 403, 'Staff blocked from triggering rematch (403 Forbidden)');
+-
+-  // 2. Clear test cause list data and count files before sync
+-  await CauseListEntry.deleteMany({});
+-  await SyncRun.deleteMany({});
+-  const initialFilesCount = await File.countDocuments({});
+-
+-  // 3. Trigger sync via JSON/HTTP stub adapter
+-  console.log('\n▶ [2] First Cause List Sync (Insertions & Matching)');
+-  const syncDate = '2026-11-10';
+-  const syncRes1 = await request('/causelist/sync', {
+-    method: 'POST',
+-    headers: adminHeaders,
+-    body: JSON.stringify({ date: syncDate }),
+-  });
+-  assert(
+-    syncRes1.status === 201 && syncRes1.data.status === 'SUCCESS',
+-    'Initial sync run succeeds',
+-    JSON.stringify(syncRes1.data)
+-  );
+-  assert(
+-    syncRes1.data.counts.inserted === 2 && syncRes1.data.counts.updated === 0,
+-    'First run reports 2 inserted entries and 0 updated'
+-  );
+-
+-  // 4. Test Idempotency: Run same sync again
+-  console.log('\n▶ [3] Idempotent Second Sync (No Duplicates)');
+-  const syncRes2 = await request('/causelist/sync', {
+-    method: 'POST',
+-    headers: adminHeaders,
+-    body: JSON.stringify({ date: syncDate }),
+-  });
+-  assert(
+-    syncRes2.status === 201 &&
+-      syncRes2.data.counts.inserted === 0 &&
+-      syncRes2.data.counts.updated === 2,
+-    'Second run reports 0 inserted and 2 updated (idempotent)',
+-    JSON.stringify(syncRes2.data)
+-  );
+-
+-  const totalEntries = await CauseListEntry.countDocuments({});
+-  assert(totalEntries === 2, 'Total CauseListEntry count remains 2 (no duplicates)');
+-
+-  // 5. Test File count invariant (File count must never change from sync)
+-  const filesCountAfterSync = await File.countDocuments({});
+-  assert(filesCountAfterSync === initialFilesCount, 'File collection count is completely unchanged by sync');
+-
+-  // 6. Test Multi-date and Multi-court appearance for the same CINO
+-  console.log('\n▶ [4] Case History across multiple dates and courts');
+-  // Insert entry on date 2 in Court 2 for same CINO
+-  await CauseListEntry.create({
+-    causeListDate: '2026-11-11',
+-    courtNumber: '2',
+-    bench: 'Court 2 Bench',
+-    serialNumber: 15,
+-    caseNumber: 'BAIL/2024/001',
+-    cino: 'UPHC010000012024',
+-    dedupeKey: 'UPHC010000012024',
+-    matchStatus: 'MATCHED',
+-    firstSeenAt: new Date(),
+-    lastSyncedAt: new Date(),
+-  });
+-
+-  const historyRes = await request('/causelist/history/UPHC010000012024', {
+-    headers: staffHeaders,
+-  });
+-  assert(
+-    historyRes.status === 200 && historyRes.data.totalAppearances === 2,
+-    'History endpoint returns all appearances across different dates/courts for CINO'
+-  );
+-
+-  // 7. Test UNMATCHED (unknown CINO) and AMBIGUOUS (duplicate caseNumber without CINO)
+-  console.log('\n▶ [5] Match Status: UNMATCHED vs AMBIGUOUS');
+-  // Create two files with the same caseNumber to simulate ambiguity
+-  const ambigCaseNo = `AMBIG/${Date.now()}`;
+-  await File.create({
+-    fileId: `AMBIG-F1-${Date.now()}`,
+-    fileName: 'Ambiguous 1',
+-    caseId: 'CASE-AMBIG-1',
+-    caseNumber: ambigCaseNo,
+-    caseType: 'CIVIL',
+-  });
+-  await File.create({
+-    fileId: `AMBIG-F2-${Date.now()}`,
+-    fileName: 'Ambiguous 2',
+-    caseId: 'CASE-AMBIG-2',
+-    caseNumber: ambigCaseNo,
+-    caseType: 'CIVIL',
+-  });
+-
+-  // Upload synthetic entries with one unknown CINO and one ambiguous caseNumber
+-  const syntheticCsv = [
+-    'causeListDate,courtNumber,bench,serialNumber,caseNumber,cino,caseType,caseStatus',
+-    `2026-11-12,5,Bench 5,1,,UPHC999999999999,BAIL,PENDING`, // Unknown CINO -> UNMATCHED
+-    `2026-11-12,5,Bench 5,2,${ambigCaseNo},,CIVIL,PENDING`,  // Ambiguous caseNo -> AMBIGUOUS
+-    `2026-11-12,5,Bench 5,-1,,,BAIL,PENDING`,               // Invalid serial -> failure row
+-  ].join('\n');
+-
+-  const formData = new FormData();
+-  formData.append('file', new Blob([syntheticCsv], { type: 'text/csv' }), 'test-causelist.csv');
+-
+-  const uploadRes = await fetch(`${API_BASE}/causelist/sync`, {
+-    method: 'POST',
+-    headers: { Authorization: `Bearer ${adminToken}` },
+-    body: formData,
+-  });
+-  const uploadData = await uploadRes.json();
+-
+-  assert(
+-    uploadRes.status === 201 && uploadData.status === 'PARTIAL',
+-    'Sync with a bad row reports PARTIAL status'
+-  );
+-  assert(
+-    uploadData.counts.unmatched >= 1,
+-    'Unknown CINO categorized as UNMATCHED'
+-  );
+-  assert(
+-    uploadData.counts.ambiguous >= 1,
+-    'Duplicate caseNumber categorized as AMBIGUOUS'
+-  );
+-  assert(
+-    uploadData.failures.length === 1,
+-    'Invalid row captured in failures array without crashing run'
+-  );
+-
+-  // 8. Test Retry endpoint for the failed run
+-  console.log('\n▶ [6] Retry Failed Rows Endpoint');
+-  const runId = uploadData._id;
+-  const retryRes = await request(`/causelist/sync/${runId}/retry`, {
+-    method: 'POST',
+-    headers: adminHeaders,
+-  });
+-  assert(
+-    retryRes.status === 200,
+-    'Retry endpoint processes failed rows and returns report'
+-  );
+-
+-  // 9. Test Rematch endpoint
+-  console.log('\n▶ [7] Rematch Endpoint');
+-  const rematchRes = await request('/causelist/rematch', {
+-    method: 'POST',
+-    headers: adminHeaders,
+-    body: JSON.stringify({ date: '2026-11-12' }),
+-  });
+-  assert(
+-    rematchRes.status === 200 && rematchRes.data.rematchedCount >= 2,
+-    'Rematch re-evaluates all unmatched and ambiguous rows'
+-  );
+-
+-  // Cleanup test files
+-  await File.deleteMany({ caseNumber: ambigCaseNo });
+-  await mongoose.disconnect();
+-
+-  console.log(`\n=====================================================`);
+-  console.log(`📊 PHASE 4 TEST SUMMARY: ${passed} PASSED | ${failed} FAILED`);
+-  console.log(`=====================================================`);
+-
+-  if (failed > 0) process.exit(1);
+-}
+-
+-runPhase4Tests().catch((err) => {
+-  console.error('Fatal test error:', err);
+-  process.exit(1);
+-});
+-
+diff --git a/Backend/scripts/test_phase6.js b/Backend/scripts/test_phase6.js
+deleted file mode 100644
+index faf507f..0000000
+--- a/Backend/scripts/test_phase6.js
++++ /dev/null
+@@ -1,369 +0,0 @@
+-import assert from 'assert';
+-import http from 'http';
+-
+-const API_BASE = 'http://localhost:4000/api';
+-
+-async function request(path, options = {}) {
+-  const url = `${API_BASE}${path}`;
+-  const parsed = new URL(url);
+-
+-  return new Promise((resolve, reject) => {
+-    const req = http.request(
+-      {
+-        hostname: parsed.hostname,
+-        port: parsed.port,
+-        path: `${parsed.pathname}${parsed.search}`,
+-        method: options.method || 'GET',
+-        headers: {
+-          'Content-Type': 'application/json',
+-          ...(options.headers || {}),
+-        },
+-      },
+-      (res) => {
+-        let body = '';
+-        res.on('data', (chunk) => (body += chunk));
+-        res.on('end', () => {
+-          let data;
+-          try {
+-            data = JSON.parse(body);
+-          } catch {
+-            data = body;
+-          }
+-          resolve({ status: res.statusCode, data, headers: res.headers });
+-        });
+-      }
+-    );
+-    req.on('error', reject);
+-    if (options.body) {
+-      req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
+-    }
+-    req.end();
+-  });
+-}
+-
+-async function login(username, password) {
+-  const res = await request('/auth/login', {
+-    method: 'POST',
+-    body: { username, password },
+-  });
+-  if (!res.data?.token) {
+-    throw new Error(`Login failed for ${username}: ${JSON.stringify(res.data)}`);
+-  }
+-  return res.data.token;
+-}
+-
+-let passed = 0;
+-let failed = 0;
+-
+-async function test(name, fn) {
+-  try {
+-    await fn();
+-    console.log(`  ✓ ${name}`);
+-    passed++;
+-  } catch (err) {
+-    console.error(`  ✗ ${name}`);
+-    console.error(`    ${err.message}`);
+-    failed++;
+-  }
+-}
+-
+-async function run() {
+-  console.log('\n--- Running Phase 6 Tests (Handheld API + Rack Location) ---');
+-
+-  const adminToken = await login('admin', 'Admin@123');
+-  const staffToken = await login('staff', 'Staff@123');
+-
+-  const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+-  const staffHeaders = { Authorization: `Bearer ${staffToken}` };
+-
+-  // Setup: create test files with various states
+-  // 1. File with RFID and rack (LOCATED)
+-  // 2. File with RFID but no rack (NO_RACK)
+-  // 3. File with no RFID (NO_RFID)
+-  const rand = Math.floor(Math.random() * 90000) + 10000;
+-  const cinoLocated = `ALLHC01${rand}001`;
+-  const cinoNoRack = `ALLHC01${rand}002`;
+-  const cinoNoRfid = `ALLHC01${rand}003`;
+-  const cinoUnmatched = `ALLHC01${rand}004`;
+-
+-  const file1Res = await request('/files', {
+-    method: 'POST',
+-    headers: adminHeaders,
+-    body: {
+-      fileId: `FILE-HH-${rand}-1`,
+-      fileName: 'Handheld Located File',
+-      caseId: `CASE-HH-${rand}-1`,
+-      caseNumber: `WP/HH/${rand}/1`,
+-      cino: cinoLocated,
+-      caseType: 'BAIL',
+-      caseStatus: 'PENDING',
+-      rfidTag: `E28068EA${rand}01`,
+-      rackLocation: { rack: 'RACK-A', shelf: '1' },
+-    },
+-  });
+-  assert.strictEqual(file1Res.status, 201, 'File 1 should be created');
+-
+-  const file2Res = await request('/files', {
+-    method: 'POST',
+-    headers: adminHeaders,
+-    body: {
+-      fileId: `FILE-HH-${rand}-2`,
+-      fileName: 'Handheld No-Rack File',
+-      caseId: `CASE-HH-${rand}-2`,
+-      caseNumber: `WP/HH/${rand}/2`,
+-      cino: cinoNoRack,
+-      caseType: 'WTAX',
+-      caseStatus: 'PENDING',
+-      rfidTag: `E28068EA${rand}02`,
+-    },
+-  });
+-  assert.strictEqual(file2Res.status, 201, 'File 2 should be created');
+-
+-  const file3Res = await request('/files', {
+-    method: 'POST',
+-    headers: adminHeaders,
+-    body: {
+-      fileId: `FILE-HH-${rand}-3`,
+-      fileName: 'Handheld No-RFID File',
+-      caseId: `CASE-HH-${rand}-3`,
+-      caseNumber: `WP/HH/${rand}/3`,
+-      cino: cinoNoRfid,
+-      caseType: 'BAIL',
+-      caseStatus: 'PENDING',
+-    },
+-  });
+-  assert.strictEqual(file3Res.status, 201, 'File 3 should be created');
+-
+-  // Sync a cause list containing these 3 files + 1 unmatched row for unique date
+-  const testDate = '2026-12-' + String((rand % 28) + 1).padStart(2, '0');
+-  const csvData = [
+-    'Date,Court,Serial,CaseNo,CINO,Bench,Type,Status',
+-    `${testDate},1,1,WP/HH/${rand}/1,${cinoLocated},Chief Justice,BAIL,PENDING`,
+-    `${testDate},1,2,WP/HH/${rand}/2,${cinoNoRack},Chief Justice,WTAX,PENDING`,
+-    `${testDate},2,1,WP/HH/${rand}/3,${cinoNoRfid},Court 2 Bench,BAIL,PENDING`,
+-    `${testDate},2,2,WP/HH/${rand}/4,${cinoUnmatched},Court 2 Bench,CRLR,PENDING`,
+-  ].join('\n');
+-
+-  // Upload cause list via multipart request helper
+-  // Use http request with raw boundary
+-  const boundary = '----WebKitFormBoundaryPhase6Test' + Math.random().toString(36).slice(2);
+-  let multipartBody = '';
+-  multipartBody += `--${boundary}\r\n`;
+-  multipartBody += `Content-Disposition: form-data; name="date"\r\n\r\n${testDate}\r\n`;
+-  multipartBody += `--${boundary}\r\n`;
+-  multipartBody += `Content-Disposition: form-data; name="file"; filename="hh_test.csv"\r\n`;
+-  multipartBody += `Content-Type: text/csv\r\n\r\n${csvData}\r\n`;
+-  multipartBody += `--${boundary}--\r\n`;
+-
+-  const syncRes = await new Promise((resolve, reject) => {
+-    const parsed = new URL(`${API_BASE}/causelist/sync`);
+-    const req = http.request(
+-      {
+-        hostname: parsed.hostname,
+-        port: parsed.port,
+-        path: parsed.pathname,
+-        method: 'POST',
+-        headers: {
+-          Authorization: `Bearer ${adminToken}`,
+-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+-          'Content-Length': Buffer.byteLength(multipartBody),
+-        },
+-      },
+-      (res) => {
+-        let data = '';
+-        res.on('data', (c) => (data += c));
+-        res.on('end', () => resolve({ status: res.statusCode, data: JSON.parse(data) }));
+-      }
+-    );
+-    req.on('error', reject);
+-    req.write(multipartBody);
+-    req.end();
+-  });
+-  assert.strictEqual(syncRes.status, 201, 'Cause list sync must succeed');
+-
+-  // ─── Tests for PUT /api/files/:fileId/rack ─────────────────────────────────
+-
+-  await test('PUT /api/files/:fileId/rack requires authentication', async () => {
+-    const res = await request(`/files/${file2Res.data.fileId}/rack`, {
+-      method: 'PUT',
+-      body: { rack: 'RACK-B', shelf: '2' },
+-    });
+-    assert.strictEqual(res.status, 401);
+-  });
+-
+-  await test('PUT /api/files/:fileId/rack allows staff to update rack', async () => {
+-    const res = await request(`/files/${file2Res.data.fileId}/rack`, {
+-      method: 'PUT',
+-      headers: staffHeaders,
+-      body: { rack: 'RACK-B', shelf: '2' },
+-    });
+-    assert.strictEqual(res.status, 200);
+-    assert.strictEqual(res.data.rackLocation?.rack, 'RACK-B');
+-    assert.strictEqual(res.data.rackLocation?.shelf, '2');
+-    assert.ok(res.data.rackLocation?.updatedAt);
+-  });
+-
+-  await test('PUT /api/files/:fileId/rack allows admin to update rack by MongoDB _id', async () => {
+-    const res = await request(`/files/${file2Res.data._id}/rack`, {
+-      method: 'PUT',
+-      headers: adminHeaders,
+-      body: { rack: 'RACK-B-UPDATED', shelf: '3' },
+-    });
+-    assert.strictEqual(res.status, 200);
+-    assert.strictEqual(res.data.rackLocation?.rack, 'RACK-B-UPDATED');
+-    assert.strictEqual(res.data.rackLocation?.shelf, '3');
+-  });
+-
+-  await test('PUT /api/files/:fileId/rack validates required rack string and pattern', async () => {
+-    // Missing rack
+-    const res1 = await request(`/files/${file2Res.data.fileId}/rack`, {
+-      method: 'PUT',
+-      headers: staffHeaders,
+-      body: { shelf: '1' },
+-    });
+-    assert.strictEqual(res1.status, 400);
+-
+-    // Empty rack
+-    const res2 = await request(`/files/${file2Res.data.fileId}/rack`, {
+-      method: 'PUT',
+-      headers: staffHeaders,
+-      body: { rack: '   ' },
+-    });
+-    assert.strictEqual(res2.status, 400);
+-
+-    // Special characters disallowed in rack
+-    const res3 = await request(`/files/${file2Res.data.fileId}/rack`, {
+-      method: 'PUT',
+-      headers: staffHeaders,
+-      body: { rack: 'RACK<script>' },
+-    });
+-    assert.strictEqual(res3.status, 400);
+-
+-    // Shelf with invalid chars
+-    const res4 = await request(`/files/${file2Res.data.fileId}/rack`, {
+-      method: 'PUT',
+-      headers: staffHeaders,
+-      body: { rack: 'RACK-VALID', shelf: 'SHELF*&^' },
+-    });
+-    assert.strictEqual(res4.status, 400);
+-  });
+-
+-  await test('PUT /api/files/:fileId/rack writes RACK_UPDATE to AuditLog', async () => {
+-    const getRes = await request(`/files/${file2Res.data.fileId}`, { headers: adminHeaders });
+-    assert.strictEqual(getRes.status, 200);
+-    const rackAudit = getRes.data.auditTrail?.find((a) => a.action === 'RACK_UPDATE');
+-    assert.ok(rackAudit, 'Audit log should contain RACK_UPDATE');
+-    assert.strictEqual(rackAudit.after?.rackLocation?.rack, 'RACK-B-UPDATED');
+-  });
+-
+-  await test('PUT /api/files/:fileId/rack returns 404 for nonexistent file', async () => {
+-    const res = await request('/files/NONEXISTENT-FILE-99999/rack', {
+-      method: 'PUT',
+-      headers: staffHeaders,
+-      body: { rack: 'RACK-X' },
+-    });
+-    assert.strictEqual(res.status, 404);
+-  });
+-
+-  // ─── Tests for GET /api/handheld/causelist ─────────────────────────────────
+-
+-  await test('GET /api/handheld/causelist requires authentication', async () => {
+-    const res = await request('/handheld/causelist');
+-    assert.strictEqual(res.status, 401);
+-  });
+-
+-  await test('GET /api/handheld/causelist is accessible by staff', async () => {
+-    const res = await request(`/handheld/causelist?date=${testDate}`, { headers: staffHeaders });
+-    assert.strictEqual(res.status, 200);
+-    assert.strictEqual(res.data.date, testDate);
+-    assert.strictEqual(res.data.total, 4);
+-    assert.strictEqual(res.data.items.length, 4);
+-  });
+-
+-  await test('GET /api/handheld/causelist computes accurate availability flags', async () => {
+-    const res = await request(`/handheld/causelist?date=${testDate}`, { headers: adminHeaders });
+-    assert.strictEqual(res.status, 200);
+-
+-    const items = res.data.items;
+-    const item1 = items.find((i) => i.cino === cinoLocated);
+-    const item2 = items.find((i) => i.cino === cinoNoRack);
+-    const item3 = items.find((i) => i.cino === cinoNoRfid);
+-    const item4 = items.find((i) => i.cino === cinoUnmatched);
+-
+-    assert.ok(item1, 'item1 must exist');
+-    assert.strictEqual(item1.availability, 'LOCATED', 'item1 has RFID and rack');
+-    assert.strictEqual(item1.rfidMapped, true);
+-
+-    assert.ok(item2, 'item2 must exist');
+-    // Note: earlier we updated file2 rack to RACK-B-UPDATED, so it is now LOCATED
+-    assert.strictEqual(item2.availability, 'LOCATED', 'item2 was updated with rack');
+-
+-    assert.ok(item3, 'item3 must exist');
+-    assert.strictEqual(item3.availability, 'NO_RFID', 'item3 has file but no RFID tag');
+-    assert.strictEqual(item3.rfidMapped, false);
+-
+-    assert.ok(item4, 'item4 must exist');
+-    assert.strictEqual(item4.availability, 'NO_FILE', 'item4 has no matched file');
+-    assert.strictEqual(item4.rfidMapped, false);
+-  });
+-
+-  await test('GET /api/handheld/causelist filters by caseType', async () => {
+-    const res = await request(`/handheld/causelist?date=${testDate}&caseType=BAIL`, { headers: staffHeaders });
+-    assert.strictEqual(res.status, 200);
+-    assert.strictEqual(res.data.total, 2);
+-    assert.ok(res.data.items.every((i) => i.caseType === 'BAIL'));
+-  });
+-
+-  await test('GET /api/handheld/causelist filters by court', async () => {
+-    const res = await request(`/handheld/causelist?date=${testDate}&court=1`, { headers: staffHeaders });
+-    assert.strictEqual(res.status, 200);
+-    assert.strictEqual(res.data.total, 2);
+-    assert.ok(res.data.items.every((i) => i.courtNumber === '1'));
+-  });
+-
+-  await test('GET /api/handheld/causelist performs regex-safe text search on caseNumber and CINO', async () => {
+-    // Normal search
+-    const res1 = await request(`/handheld/causelist?date=${testDate}&q=${cinoLocated}`, { headers: staffHeaders });
+-    assert.strictEqual(res1.status, 200);
+-    assert.strictEqual(res1.data.total, 1);
+-    assert.strictEqual(res1.data.items[0].cino, cinoLocated);
+-
+-    // Regex chars in q do not crash
+-    const res2 = await request(`/handheld/causelist?date=${testDate}&q=WP/HH/${rand}/.*`, { headers: staffHeaders });
+-    assert.strictEqual(res2.status, 200);
+-    assert.strictEqual(res2.data.total, 0, 'Literal regex pattern should not match all');
+-  });
+-
+-  await test('GET /api/handheld/causelist protects against NoSQL injection on query params', async () => {
+-    const res = await request(`/handheld/causelist?q[$ne]=test`, { headers: staffHeaders });
+-    // Object param rejected or safe
+-    assert.ok(res.status === 400 || res.status === 200);
+-  });
+-
+-  await test('GET /api/handheld/causelist sorts by courtNumber ASC then serialNumber ASC', async () => {
+-    const res = await request(`/handheld/causelist?date=${testDate}`, { headers: staffHeaders });
+-    assert.strictEqual(res.status, 200);
+-    const items = res.data.items;
+-    for (let i = 0; i < items.length - 1; i++) {
+-      const courtComp = String(items[i].courtNumber).localeCompare(String(items[i + 1].courtNumber), undefined, { numeric: true });
+-      if (courtComp === 0) {
+-        assert.ok(Number(items[i].serialNumber) <= Number(items[i + 1].serialNumber), 'serialNumber ascending');
+-      } else {
+-        assert.ok(courtComp < 0, 'courtNumber ascending');
+-      }
+-    }
+-  });
+-
+-  // Cleanup test files
+-  await request(`/files/${file1Res.data.fileId}`, { method: 'DELETE', headers: adminHeaders });
+-  await request(`/files/${file2Res.data.fileId}`, { method: 'DELETE', headers: adminHeaders });
+-  await request(`/files/${file3Res.data.fileId}`, { method: 'DELETE', headers: adminHeaders });
+-
+-  console.log(`\nPhase 6 Results: ${passed} PASSED | ${failed} FAILED`);
+-  if (failed > 0) process.exit(1);
+-}
+-
+-run().catch((e) => {
+-  console.error('Test runner fatal error:', e);
+-  process.exit(1);
+-});
+diff --git a/Backend/services/causelist/adapters/httpAdapter.js b/Backend/services/causelist/adapters/httpAdapter.js
+deleted file mode 100644
+index 765c773..0000000
+--- a/Backend/services/causelist/adapters/httpAdapter.js
++++ /dev/null
+@@ -1,52 +0,0 @@
+-/**
+- * HTTP/External API Adapter for Cause List ingestion (Decision D1).
+- * Reads URL and API Key from environment (.env).
+- *
+- * This adapter NEVER fabricates data. If CAUSELIST_API_URL is not configured,
+- * isConfigured() returns false and fetchEntries() throws, so no placeholder
+- * cause list rows can ever reach the database.
+- */
+-export class HttpAdapter {
+-  constructor({ url, apiKey } = {}) {
+-    this.url = url || process.env.CAUSELIST_API_URL || '';
+-    this.apiKey = apiKey || process.env.CAUSELIST_API_KEY || '';
+-  }
+-
+-  isConfigured() {
+-    return Boolean(this.url);
+-  }
+-
+-  async fetchEntries({ date }) {
+-    if (!date) throw new Error('Date is required for HTTP cause list fetch');
+-    if (!this.isConfigured()) {
+-      throw new Error(
+-        'External Cause List API is not configured (CAUSELIST_API_URL is empty). Upload a cause list file instead.'
+-      );
+-    }
+-
+-    const targetUrl = new URL(this.url);
+-    targetUrl.searchParams.set('date', date);
+-
+-    const headers = { 'Content-Type': 'application/json' };
+-    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+-
+-    const res = await fetch(targetUrl.toString(), { headers });
+-    if (!res.ok) {
+-      throw new Error(`External Cause List API error (${res.status}): ${await res.text()}`);
+-    }
+-    const data = await res.json();
+-    const rawRows = Array.isArray(data) ? data : data.entries || data.items || [];
+-    return rawRows.map((r, idx) => ({
+-      _rowIndex: idx + 1,
+-      _raw: r,
+-      causeListDate: r.causeListDate || date,
+-      courtNumber: String(r.courtNumber || r.court || '').trim(),
+-      bench: String(r.bench || r.judge || '').trim(),
+-      serialNumber: Number(r.serialNumber || r.serial || idx + 1),
+-      caseNumber: String(r.caseNumber || '').trim(),
+-      cino: String(r.cino || '').trim().toUpperCase(),
+-      caseType: String(r.caseType || '').trim().toUpperCase(),
+-      caseStatus: String(r.caseStatus || '').trim().toUpperCase(),
+-    }));
+-  }
+-}
+diff --git a/Backend/services/causelist/adapters/manualUploadAdapter.js b/Backend/services/causelist/adapters/manualUploadAdapter.js
+deleted file mode 100644
+index 40f2b59..0000000
+--- a/Backend/services/causelist/adapters/manualUploadAdapter.js
++++ /dev/null
+@@ -1,141 +0,0 @@
+-import * as XLSX from 'xlsx';
+-
+-function normalizeKey(key) {
+-  return String(key || '')
+-    .trim()
+-    .toLowerCase()
+-    .replace(/[\s_-]+/g, '');
+-}
+-
+-const ALIASES = {
+-  causelistdate: 'causeListDate',
+-  date: 'causeListDate',
+-  listdate: 'causeListDate',
+-  court: 'courtNumber',
+-  courtnumber: 'courtNumber',
+-  courtno: 'courtNumber',
+-  bench: 'bench',
+-  judge: 'bench',
+-  serial: 'serialNumber',
+-  serialnumber: 'serialNumber',
+-  srno: 'serialNumber',
+-  sno: 'serialNumber',
+-  casenumber: 'caseNumber',
+-  caseno: 'caseNumber',
+-  cino: 'cino',
+-  cinoo: 'cino',
+-  casetype: 'caseType',
+-  type: 'caseType',
+-  casestatus: 'caseStatus',
+-  status: 'caseStatus',
+-};
+-
+-function formatExcelOrStringDate(val) {
+-  if (!val) return '';
+-  if (typeof val === 'string') {
+-    const trimmed = val.trim();
+-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+-    // DD-MM-YYYY / DD/MM/YYYY / DD.MM.YYYY (common in Indian court exports)
+-    const dmy = trimmed.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+-    if (dmy) {
+-      const [, dd, mm, yyyy] = dmy;
+-      return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+-    }
+-    // YYYY/MM/DD
+-    const ymd = trimmed.match(/^(\d{4})[/.](\d{1,2})[/.](\d{1,2})$/);
+-    if (ymd) {
+-      const [, yyyy, mm, dd] = ymd;
+-      return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+-    }
+-    const num = Number(trimmed);
+-    if (!isNaN(num) && num > 30000 && num < 60000) {
+-      // Excel serial date to Asia/Kolkata date string (D5)
+-      const utcMs = Math.round((num - 25569) * 86400 * 1000);
+-      const kolkataDate = new Date(utcMs + 5.5 * 3600 * 1000);
+-      return kolkataDate.toISOString().slice(0, 10);
+-    }
+-    const d = new Date(trimmed);
+-    if (!isNaN(d.getTime())) {
+-      const kolkataDate = new Date(d.getTime() + 5.5 * 3600 * 1000);
+-      return kolkataDate.toISOString().slice(0, 10);
+-    }
+-    return trimmed;
+-  }
+-  if (typeof val === 'number' && val > 30000 && val < 60000) {
+-    const utcMs = Math.round((val - 25569) * 86400 * 1000);
+-    const kolkataDate = new Date(utcMs + 5.5 * 3600 * 1000);
+-    return kolkataDate.toISOString().slice(0, 10);
+-  }
+-  if (val instanceof Date && !isNaN(val.getTime())) {
+-    const kolkataDate = new Date(val.getTime() + 5.5 * 3600 * 1000);
+-    return kolkataDate.toISOString().slice(0, 10);
+-  }
+-  return String(val).trim();
+-}
+-
+-export class ManualUploadAdapter {
+-  /**
+-   * @param {Buffer} buffer - File buffer (XLSX, XLS, CSV, or JSON)
+-   * @param {string} originalName - Name of the uploaded file
+-   */
+-  constructor(buffer, originalName = '') {
+-    this.buffer = buffer;
+-    this.originalName = originalName;
+-  }
+-
+-  async fetchEntries({ defaultDate } = {}) {
+-    if (!this.buffer || !this.buffer.length) {
+-      throw new Error('Upload buffer is empty');
+-    }
+-
+-    let rawRows = [];
+-    const isJson = this.originalName.toLowerCase().endsWith('.json');
+-
+-    if (isJson) {
+-      try {
+-        const text = this.buffer.toString('utf-8');
+-        const parsed = JSON.parse(text);
+-        rawRows = Array.isArray(parsed) ? parsed : parsed.items || parsed.rows || [parsed];
+-      } catch (err) {
+-        throw new Error(`Invalid JSON file: ${err.message}`);
+-      }
+-    } else {
+-      let workbook;
+-      try {
+-        workbook = XLSX.read(this.buffer, { type: 'buffer', raw: true });
+-      } catch (err) {
+-        throw new Error(`Unable to read spreadsheet: ${err.message}`);
+-      }
+-      const sheetName = workbook.SheetNames[0];
+-      if (!sheetName) throw new Error('Uploaded sheet has no worksheets');
+-      rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+-    }
+-
+-    return rawRows.map((raw, idx) => {
+-      const mapped = {};
+-      for (const [key, val] of Object.entries(raw)) {
+-        const canonical = ALIASES[normalizeKey(key)];
+-        if (canonical) mapped[canonical] = typeof val === 'string' ? val.trim() : val;
+-      }
+-
+-      // Format date if present or fallback to defaultDate
+-      let rowDate = formatExcelOrStringDate(mapped.causeListDate);
+-      if (!rowDate && defaultDate) {
+-        rowDate = defaultDate;
+-      }
+-
+-      return {
+-        _rowIndex: idx + 2,
+-        _raw: raw,
+-        causeListDate: rowDate,
+-        courtNumber: mapped.courtNumber ? String(mapped.courtNumber).trim() : '',
+-        bench: mapped.bench ? String(mapped.bench).trim() : '',
+-        serialNumber: Number(mapped.serialNumber),
+-        caseNumber: mapped.caseNumber ? String(mapped.caseNumber).trim() : '',
+-        cino: mapped.cino ? String(mapped.cino).trim().toUpperCase() : '',
+-        caseType: mapped.caseType ? String(mapped.caseType).trim().toUpperCase() : '',
+-        caseStatus: mapped.caseStatus ? String(mapped.caseStatus).trim().toUpperCase() : '',
+-      };
+-    });
+-  }
+-}
+diff --git a/Backend/services/causelist/syncService.js b/Backend/services/causelist/syncService.js
+deleted file mode 100644
+index 25da302..0000000
+--- a/Backend/services/causelist/syncService.js
++++ /dev/null
+@@ -1,450 +0,0 @@
+-import CauseListEntry from '../../models/CauseListEntry.js';
+-import SyncRun from '../../models/SyncRun.js';
+-import File from '../../models/File.js';
+-import AuditLog from '../../models/AuditLog.js';
+-
+-function computeDedupeKey(cino, caseNumber, caseType) {
+-  if (cino && typeof cino === 'string' && cino.trim()) {
+-    return cino.trim().toUpperCase();
+-  }
+-  const normalizedCaseNo = String(caseNumber || '').trim().replace(/[\s/_-]+/g, '').toUpperCase();
+-  const normalizedType = String(caseType || '').trim().toUpperCase();
+-  return `${normalizedCaseNo}_${normalizedType}`;
+-}
+-
+-const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+-
+-/**
+- * Runs a Cause List Synchronization run.
+- */
+-export async function runSync({
+-  date,
+-  adapter,
+-  userId = null,
+-  username = 'system',
+-  trigger = 'MANUAL',
+-}) {
+-  // Guard against simultaneous running sync for the same date
+-  const existingActive = await SyncRun.findOne({
+-    'params.date': date,
+-    status: 'RUNNING',
+-  });
+-  if (existingActive) {
+-    throw new Error(`A synchronization run for date "${date}" is already in progress.`);
+-  }
+-
+-  // 1. Create SyncRun
+-  const syncRun = await SyncRun.create({
+-    trigger,
+-    requestedBy: userId,
+-    username,
+-    params: { date },
+-    startedAt: new Date(),
+-    status: 'RUNNING',
+-  });
+-
+-  const counts = {
+-    received: 0,
+-    inserted: 0,
+-    updated: 0,
+-    matched: 0,
+-    unmatched: 0,
+-    ambiguous: 0,
+-    failed: 0,
+-  };
+-  const failures = [];
+-
+-  try {
+-    // 2. Fetch raw rows via adapter
+-    const rawRows = await adapter.fetchEntries({ defaultDate: date, date });
+-    counts.received = rawRows.length;
+-
+-    // 3. Process each row
+-    for (const row of rawRows) {
+-      try {
+-        const rowDate = row.causeListDate || date;
+-        if (!rowDate || !DATE_REGEX.test(rowDate)) {
+-          throw new Error(`Invalid date format "${rowDate}". Must be YYYY-MM-DD.`);
+-        }
+-        if (!row.courtNumber) {
+-          throw new Error('Court number is required.');
+-        }
+-        if (isNaN(row.serialNumber) || row.serialNumber <= 0) {
+-          throw new Error(`Invalid serial number "${row.serialNumber}". Must be a positive integer.`);
+-        }
+-        if (!row.cino && !row.caseNumber) {
+-          throw new Error('Each row must contain at least a CINO or a Case Number.');
+-        }
+-
+-        const cleanCino = row.cino ? row.cino.trim().toUpperCase() : '';
+-        const cleanCaseNo = row.caseNumber ? row.caseNumber.trim() : '';
+-        const cleanType = row.caseType ? row.caseType.trim().toUpperCase() : '';
+-        const cleanStatus = row.caseStatus && ['PENDING', 'DISPOSED'].includes(row.caseStatus.trim().toUpperCase())
+-          ? row.caseStatus.trim().toUpperCase()
+-          : '';
+-
+-        const dedupeKey = computeDedupeKey(cleanCino, cleanCaseNo, cleanType);
+-
+-        // Matching Logic
+-        let matchedFile = null;
+-        let matchStatus = 'UNMATCHED';
+-        let matchReason = 'NO_FILE';
+-
+-        if (cleanCino) {
+-          matchedFile = await File.findOne({ cino: cleanCino, archived: { $ne: true } });
+-          if (matchedFile) {
+-            matchStatus = 'MATCHED';
+-            matchReason = 'CINO';
+-          }
+-        }
+-
+-        if (!matchedFile && cleanCaseNo) {
+-          const query = {
+-            $or: [{ caseNumber: cleanCaseNo }, { caseId: cleanCaseNo }],
+-            archived: { $ne: true },
+-          };
+-          if (cleanType) query.caseType = cleanType;
+-
+-          const candidates = await File.find(query).limit(2);
+-          if (candidates.length === 1) {
+-            matchedFile = candidates[0];
+-            matchStatus = 'MATCHED';
+-            matchReason = 'CASE_NUMBER';
+-          } else if (candidates.length > 1) {
+-            matchStatus = 'AMBIGUOUS';
+-            matchReason = 'MULTIPLE_FILES';
+-          }
+-        }
+-
+-        if (matchStatus === 'MATCHED') counts.matched++;
+-        else if (matchStatus === 'AMBIGUOUS') counts.ambiguous++;
+-        else counts.unmatched++;
+-
+-        // Optional Case Status Refresh on matched file
+-        if (matchedFile && cleanStatus && matchedFile.caseStatus !== cleanStatus) {
+-          const beforeStatus = matchedFile.caseStatus;
+-          matchedFile.caseStatus = cleanStatus;
+-          await matchedFile.save();
+-
+-          await AuditLog.create({
+-            userId,
+-            username,
+-            action: 'CAUSELIST_SYNC',
+-            targetType: 'File',
+-            targetId: matchedFile.fileId,
+-            before: { caseStatus: beforeStatus },
+-            after: { caseStatus: cleanStatus },
+-            reason: `Auto-updated from Cause List sync (${rowDate}, Court ${row.courtNumber})`,
+-          });
+-        }
+-
+-        // Upsert CauseListEntry
+-        const existingEntry = await CauseListEntry.findOne({
+-          causeListDate: rowDate,
+-          courtNumber: row.courtNumber,
+-          dedupeKey,
+-        });
+-
+-        if (existingEntry) {
+-          existingEntry.bench = row.bench || existingEntry.bench;
+-          existingEntry.serialNumber = row.serialNumber;
+-          existingEntry.caseNumber = cleanCaseNo || existingEntry.caseNumber;
+-          existingEntry.cino = cleanCino || existingEntry.cino;
+-          existingEntry.caseType = cleanType || existingEntry.caseType;
+-          if (cleanStatus) existingEntry.caseStatus = cleanStatus;
+-          existingEntry.file = matchedFile ? matchedFile._id : null;
+-          existingEntry.matchStatus = matchStatus;
+-          existingEntry.matchReason = matchReason;
+-          existingEntry.lastSyncedAt = new Date();
+-          existingEntry.syncRunId = syncRun._id;
+-          await existingEntry.save();
+-          counts.updated++;
+-        } else {
+-          await CauseListEntry.create({
+-            causeListDate: rowDate,
+-            courtNumber: row.courtNumber,
+-            bench: row.bench || '',
+-            serialNumber: row.serialNumber,
+-            caseNumber: cleanCaseNo,
+-            cino: cleanCino,
+-            caseType: cleanType,
+-            caseStatus: cleanStatus,
+-            dedupeKey,
+-            file: matchedFile ? matchedFile._id : null,
+-            matchStatus,
+-            matchReason,
+-            syncRunId: syncRun._id,
+-            firstSeenAt: new Date(),
+-            lastSyncedAt: new Date(),
+-          });
+-          counts.inserted++;
+-        }
+-      } catch (rowErr) {
+-        counts.failed++;
+-        failures.push({
+-          rowIndex: row._rowIndex || 0,
+-          rawRow: row._raw || row,
+-          error: rowErr.message,
+-          retryable: true,
+-        });
+-      }
+-    }
+-
+-    // 4. Close SyncRun
+-    syncRun.finishedAt = new Date();
+-    syncRun.counts = counts;
+-    syncRun.failures = failures;
+-    syncRun.status = counts.failed > 0 ? (counts.inserted + counts.updated > 0 ? 'PARTIAL' : 'FAILED') : 'SUCCESS';
+-    await syncRun.save();
+-
+-    await AuditLog.create({
+-      userId,
+-      username,
+-      action: 'CAUSELIST_SYNC',
+-      targetType: 'SyncRun',
+-      targetId: String(syncRun._id),
+-      after: {
+-        date,
+-        status: syncRun.status,
+-        counts,
+-      },
+-      reason: `Cause List Sync (${trigger}) for ${date}`,
+-    });
+-
+-    return syncRun;
+-  } catch (fatalErr) {
+-    syncRun.finishedAt = new Date();
+-    syncRun.status = 'FAILED';
+-    syncRun.counts = counts;
+-    failures.push({ error: fatalErr.message, retryable: false });
+-    syncRun.failures = failures;
+-    await syncRun.save();
+-    throw fatalErr;
+-  }
+-}
+-
+-/**
+- * Re-runs matching for unmatched or ambiguous cause list entries.
+- */
+-export async function rematchEntries({ date, userId = null, username = 'system' } = {}) {
+-  const query = {
+-    matchStatus: { $in: ['UNMATCHED', 'AMBIGUOUS'] },
+-  };
+-  if (date) query.causeListDate = date;
+-
+-  const entries = await CauseListEntry.find(query);
+-  let rematchedCount = 0;
+-  let newlyMatchedCount = 0;
+-
+-  for (const entry of entries) {
+-    let matchedFile = null;
+-    let matchStatus = 'UNMATCHED';
+-    let matchReason = 'NO_FILE';
+-
+-    if (entry.cino) {
+-      matchedFile = await File.findOne({ cino: entry.cino, archived: { $ne: true } });
+-      if (matchedFile) {
+-        matchStatus = 'MATCHED';
+-        matchReason = 'CINO';
+-      }
+-    }
+-
+-    if (!matchedFile && entry.caseNumber) {
+-      const q = {
+-        $or: [{ caseNumber: entry.caseNumber }, { caseId: entry.caseNumber }],
+-        archived: { $ne: true },
+-      };
+-      if (entry.caseType) q.caseType = entry.caseType;
+-
+-      const candidates = await File.find(q).limit(2);
+-      if (candidates.length === 1) {
+-        matchedFile = candidates[0];
+-        matchStatus = 'MATCHED';
+-        matchReason = 'CASE_NUMBER';
+-      } else if (candidates.length > 1) {
+-        matchStatus = 'AMBIGUOUS';
+-        matchReason = 'MULTIPLE_FILES';
+-      }
+-    }
+-
+-    if (matchStatus === 'MATCHED') {
+-      entry.file = matchedFile._id;
+-      entry.matchStatus = matchStatus;
+-      entry.matchReason = matchReason;
+-      entry.lastSyncedAt = new Date();
+-      await entry.save();
+-      newlyMatchedCount++;
+-    }
+-    rematchedCount++;
+-  }
+-
+-  await AuditLog.create({
+-    userId,
+-    username,
+-    action: 'CAUSELIST_REMATCH',
+-    targetType: 'CauseListEntry',
+-    targetId: date || 'ALL',
+-    after: { rematchedCount, newlyMatchedCount },
+-    reason: `Rematch triggered for ${rematchedCount} entries`,
+-  });
+-
+-  return { rematchedCount, newlyMatchedCount };
+-}
+-
+-/**
+- * Retries failed rows from a previous SyncRun.
+- */
+-export async function retryFailedRows({ runId, userId = null, username = 'system' }) {
+-  const run = await SyncRun.findById(runId);
+-  if (!run) throw new Error(`SyncRun "${runId}" not found`);
+-
+-  const retryableFailures = run.failures.filter((f) => f.retryable !== false);
+-  if (retryableFailures.length === 0) {
+-    return { message: 'No retryable failures in this run', run };
+-  }
+-
+-  const remainingFailures = [];
+-  let recoveredCount = 0;
+-
+-  for (const failure of retryableFailures) {
+-    const row = failure.rawRow;
+-    try {
+-      const rowDate = row.causeListDate || run.params?.date;
+-      if (!rowDate || !DATE_REGEX.test(rowDate)) {
+-        throw new Error(`Invalid date format "${rowDate}". Must be YYYY-MM-DD.`);
+-      }
+-      if (!row.courtNumber) throw new Error('Court number is required.');
+-      if (isNaN(row.serialNumber) || row.serialNumber <= 0) throw new Error('Valid serial number is required.');
+-      if (!row.cino && !row.caseNumber) throw new Error('At least CINO or Case Number is required.');
+-
+-      const cleanCino = row.cino ? String(row.cino).trim().toUpperCase() : '';
+-      const cleanCaseNo = row.caseNumber ? String(row.caseNumber).trim() : '';
+-      const cleanType = row.caseType ? String(row.caseType).trim().toUpperCase() : '';
+-      const cleanStatus = row.caseStatus ? String(row.caseStatus).trim().toUpperCase() : '';
+-
+-      const dedupeKey = computeDedupeKey(cleanCino, cleanCaseNo, cleanType);
+-
+-      let matchedFile = null;
+-      let matchStatus = 'UNMATCHED';
+-      let matchReason = 'NO_FILE';
+-
+-      if (cleanCino) {
+-        matchedFile = await File.findOne({ cino: cleanCino, archived: { $ne: true } });
+-        if (matchedFile) {
+-          matchStatus = 'MATCHED';
+-          matchReason = 'CINO';
+-        }
+-      }
+-
+-      if (!matchedFile && cleanCaseNo) {
+-        const q = {
+-          $or: [{ caseNumber: cleanCaseNo }, { caseId: cleanCaseNo }],
+-          archived: { $ne: true },
+-        };
+-        if (cleanType) q.caseType = cleanType;
+-        const candidates = await File.find(q).limit(2);
+-        if (candidates.length === 1) {
+-          matchedFile = candidates[0];
+-          matchStatus = 'MATCHED';
+-          matchReason = 'CASE_NUMBER';
+-        } else if (candidates.length > 1) {
+-          matchStatus = 'AMBIGUOUS';
+-          matchReason = 'MULTIPLE_FILES';
+-        }
+-      }
+-
+-      await CauseListEntry.findOneAndUpdate(
+-        { causeListDate: rowDate, courtNumber: row.courtNumber, dedupeKey },
+-        {
+-          causeListDate: rowDate,
+-          courtNumber: row.courtNumber,
+-          bench: row.bench || '',
+-          serialNumber: row.serialNumber,
+-          caseNumber: cleanCaseNo,
+-          cino: cleanCino,
+-          caseType: cleanType,
+-          caseStatus: cleanStatus,
+-          dedupeKey,
+-          file: matchedFile ? matchedFile._id : null,
+-          matchStatus,
+-          matchReason,
+-          syncRunId: run._id,
+-          lastSyncedAt: new Date(),
+-        },
+-        { upsert: true, new: true, setDefaultsOnInsert: true }
+-      );
+-
+-      recoveredCount++;
+-      run.counts.inserted++;
+-      run.counts.failed = Math.max(0, run.counts.failed - 1);
+-    } catch (err) {
+-      remainingFailures.push({
+-        rowIndex: failure.rowIndex,
+-        rawRow: row,
+-        error: err.message,
+-        retryable: true,
+-      });
+-    }
+-  }
+-
+-  run.failures = remainingFailures;
+-  run.status = remainingFailures.length === 0 ? 'SUCCESS' : 'PARTIAL';
+-  await run.save();
+-
+-  return { recoveredCount, remainingFailuresCount: remainingFailures.length, run };
+-}
+-
+-
+-/**
+- * Links existing UNMATCHED / AMBIGUOUS cause list entries to a File.
+- * Called when a file is registered or its CINO / case number / type changes,
+- * so cause list rows synced BEFORE the file existed become searchable
+- * (handheld, rack location) without waiting for another sync.
+- * Never creates entries or files, so it cannot produce duplicates.
+- */
+-export async function relinkEntriesForFile(file) {
+-  if (!file || file.archived) return 0;
+-  const or = [];
+-  if (file.cino) or.push({ cino: String(file.cino).trim().toUpperCase() });
+-  const cn = file.caseNumber ? String(file.caseNumber).trim() : '';
+-  if (cn) or.push({ caseNumber: cn });
+-  if (file.caseId) or.push({ caseNumber: String(file.caseId).trim() });
+-  if (or.length === 0) return 0;
+-
+-  const entries = await CauseListEntry.find({
+-    matchStatus: { $in: ['UNMATCHED', 'AMBIGUOUS'] },
+-    $or: or,
+-  });
+-
+-  let linked = 0;
+-  for (const entry of entries) {
+-    let matched = null;
+-    let reason = '';
+-
+-    if (entry.cino) {
+-      matched = await File.findOne({ cino: entry.cino, archived: { $ne: true } });
+-      if (matched) reason = 'CINO';
+-    }
+-    if (!matched && entry.caseNumber) {
+-      const q = {
+-        $or: [{ caseNumber: entry.caseNumber }, { caseId: entry.caseNumber }],
+-        archived: { $ne: true },
+-      };
+-      if (entry.caseType) q.caseType = entry.caseType;
+-      const candidates = await File.find(q).limit(2);
+-      if (candidates.length === 1) {
+-        matched = candidates[0];
+-        reason = 'CASE_NUMBER';
+-      }
+-    }
+-    if (matched) {
+-      entry.file = matched._id;
+-      entry.matchStatus = 'MATCHED';
+-      entry.matchReason = reason;
+-      entry.lastSyncedAt = new Date();
+-      await entry.save();
+-      linked++;
+-    }
+-  }
+-  return linked;
+-}
+diff --git a/Frontend/src/App.jsx b/Frontend/src/App.jsx
+index 6f9b183..59ce081 100644
+--- a/Frontend/src/App.jsx
++++ b/Frontend/src/App.jsx
+@@ -14,8 +14,6 @@ import Gates from './pages/Gates.jsx';
+ import Users from './pages/Users.jsx';
+ import Reports from './pages/Reports.jsx';
+ import Search from './pages/Search.jsx';
+-import CauseList from './pages/CauseList.jsx';
+-import Handheld from './pages/Handheld.jsx';
+ 
+ export default function App() {
+   return (
+@@ -46,8 +44,6 @@ export default function App() {
+               }
+             />
+             <Route path="/court-room-status" element={<CourtRoomStatus />} />
+-            <Route path="/cause-list" element={<CauseList />} />
+-            <Route path="/handheld" element={<Handheld />} />
+             <Route path="/movements" element={<MovementLog />} />
+             <Route path="/gates" element={<Gates />} />
+             <Route path="/reports" element={<Reports />} />
+diff --git a/Frontend/src/api/causelist.js b/Frontend/src/api/causelist.js
+deleted file mode 100644
+index 0ffbbb5..0000000
+--- a/Frontend/src/api/causelist.js
++++ /dev/null
+@@ -1,54 +0,0 @@
+-import apiClient from './client.js';
+-
+-export async function fetchCauseListEntries(params = {}, signal) {
+-  const { data } = await apiClient.get('/causelist', { params, signal });
+-  return data; // { items, total, page, limit, totalPages }
+-}
+-
+-export async function fetchCauseListCaseTypes(signal) {
+-  const { data } = await apiClient.get('/causelist/case-types', { signal });
+-  return data; // string[]
+-}
+-
+-export async function fetchUnmatchedEntries(params = {}, signal) {
+-  const { data } = await apiClient.get('/causelist/unmatched', { params, signal });
+-  return data;
+-}
+-
+-export async function fetchSyncRuns(params = {}, signal) {
+-  const { data } = await apiClient.get('/causelist/sync-runs', { params, signal });
+-  return data;
+-}
+-
+-export async function fetchSyncRun(runId, signal) {
+-  const { data } = await apiClient.get(`/causelist/sync-runs/${runId}`, { signal });
+-  return data;
+-}
+-
+-export async function fetchCaseHistory(cino, signal) {
+-  const { data } = await apiClient.get(`/causelist/history/${encodeURIComponent(cino)}`, { signal });
+-  return data; // { cino, totalAppearances, history }
+-}
+-
+-export async function triggerSync({ date, file } = {}) {
+-  if (file) {
+-    const formData = new FormData();
+-    formData.append('file', file);
+-    if (date) formData.append('date', date);
+-    const { data } = await apiClient.post('/causelist/sync', formData, { timeout: 120000 });
+-    return data;
+-  }
+-  const { data } = await apiClient.post('/causelist/sync', { date }, { timeout: 60000 });
+-  return data;
+-}
+-
+-export async function retrySyncRun(runId) {
+-  const { data } = await apiClient.post(`/causelist/sync/${runId}/retry`);
+-  return data;
+-}
+-
+-export async function triggerRematch({ date } = {}) {
+-  const { data } = await apiClient.post('/causelist/rematch', date ? { date } : {});
+-  return data;
+-}
+-
+diff --git a/Frontend/src/api/handheld.js b/Frontend/src/api/handheld.js
+deleted file mode 100644
+index 9207932..0000000
+--- a/Frontend/src/api/handheld.js
++++ /dev/null
+@@ -1,12 +0,0 @@
+-import apiClient from './client.js';
+-
+-export async function fetchHandheldCauseList(params = {}, signal) {
+-  const { data } = await apiClient.get('/handheld/causelist', { params, signal });
+-  return data; // { items, total, date }
+-}
+-
+-export async function updateFileRack(fileId, payload) {
+-  const { data } = await apiClient.put(`/files/${fileId}/rack`, payload);
+-  return data;
+-}
+-
+diff --git a/Frontend/src/components/Sidebar.jsx b/Frontend/src/components/Sidebar.jsx
+index f85f6cb..729cfc9 100644
+--- a/Frontend/src/components/Sidebar.jsx
++++ b/Frontend/src/components/Sidebar.jsx
+@@ -15,8 +15,6 @@ import {
+   Users as UsersIcon,
+   LogOut,
+   Clock,
+-  ClipboardList,
+-  Smartphone,
+ } from "lucide-react";
+ import "./Sidebar.css";
+ 
+@@ -37,8 +35,6 @@ export default function Sidebar({ open = false }) {
+         { to: "/files", label: "Case Files", icon: FolderOpen },
+         { to: "/rfid-pending", label: "Pending Mapping", icon: Clock },
+         { to: "/search", label: "Search", icon: ScanSearch },
+-        { to: "/cause-list", label: "Cause List", icon: ClipboardList },
+-        { to: "/handheld", label: "Handheld Search", icon: Smartphone },
+         ...(isAdmin
+           ? [{ to: "/register", label: "Register File", icon: Tag }]
+           : []),
+diff --git a/Frontend/src/pages/CauseList.css b/Frontend/src/pages/CauseList.css
+deleted file mode 100644
+index b9c3d0a..0000000
+--- a/Frontend/src/pages/CauseList.css
++++ /dev/null
+@@ -1,322 +0,0 @@
+-.cl-page {
+-  padding: 1.5rem 2rem;
+-  max-width: 1300px;
+-  margin: 0 auto;
+-}
+-
+-/* Filter bar */
+-.cl-filter-bar {
+-  background: var(--surface);
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-md);
+-  padding: 0.85rem 1.25rem;
+-  margin-bottom: 1.25rem;
+-  display: flex;
+-  flex-wrap: wrap;
+-  gap: 0.75rem;
+-  align-items: center;
+-  justify-content: space-between;
+-  box-shadow: var(--shadow-card);
+-}
+-
+-.cl-filter-group {
+-  display: flex;
+-  flex-wrap: wrap;
+-  gap: 0.6rem;
+-  align-items: center;
+-}
+-
+-.cl-date-input,
+-.cl-text-input {
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-sm);
+-  padding: 8px 10px;
+-  font-size: 13px;
+-  font-family: inherit;
+-  background: var(--bg);
+-  color: var(--text);
+-}
+-
+-.cl-filter-bar select {
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-sm);
+-  padding: 8px 10px;
+-  font-size: 13px;
+-  font-family: inherit;
+-  background: var(--surface);
+-  color: var(--text);
+-  min-width: 120px;
+-}
+-
+-/* Info banner */
+-.cl-info-banner {
+-  display: flex;
+-  align-items: center;
+-  gap: 8px;
+-  padding: 10px 16px;
+-  border-radius: var(--radius-sm);
+-  margin-bottom: 1rem;
+-  font-size: 13px;
+-  background: var(--blue-bg);
+-  color: var(--blue-600);
+-  border: 1px solid #c7d8fa;
+-}
+-
+-/* Notification bar */
+-.cl-notification {
+-  display: flex;
+-  align-items: center;
+-  gap: 8px;
+-  padding: 10px 16px;
+-  border-radius: var(--radius-sm);
+-  margin-bottom: 1rem;
+-  font-size: 13.5px;
+-  font-weight: 500;
+-}
+-.cl-notification.success { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
+-.cl-notification.error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+-
+-/* Pagination */
+-.cl-pagination {
+-  display: flex;
+-  justify-content: space-between;
+-  align-items: center;
+-  padding: 0.85rem 1.25rem;
+-  background: var(--bg);
+-  border-top: 1px solid var(--border);
+-  font-size: 0.85rem;
+-  color: var(--text-muted);
+-}
+-
+-.cl-pag-controls { display: flex; align-items: center; gap: 0.5rem; }
+-.cl-pag-btn {
+-  display: inline-flex;
+-  align-items: center;
+-  padding: 4px 8px;
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-sm);
+-  background: var(--surface);
+-  cursor: pointer;
+-  color: var(--text);
+-}
+-.cl-pag-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+-.cl-pag-btn:hover:not(:disabled) { background: var(--bg); }
+-.cl-pag-info { font-size: 13px; }
+-
+-/* Empty / state boxes */
+-.cl-state-box {
+-  padding: 2rem;
+-  text-align: center;
+-  color: var(--text-muted);
+-  font-size: 14px;
+-}
+-.cl-state-box.error { color: var(--red-600); }
+-.cl-empty-cell {
+-  text-align: center;
+-  padding: 2rem !important;
+-  color: var(--text-faint);
+-  font-size: 13.5px;
+-}
+-
+-/* Alert */
+-.cl-alert {
+-  padding: 10px 14px;
+-  border-radius: var(--radius-sm);
+-  font-size: 13px;
+-  margin-top: 0.75rem;
+-}
+-.cl-alert.error { background: var(--red-bg); color: var(--red-600); border: 1px solid #fecaca; }
+-.cl-alert.warning { background: var(--amber-bg); color: var(--amber-600); border: 1px solid #fde68a; }
+-
+-/* Spin animation */
+-@keyframes cl-rotate {
+-  from { transform: rotate(0deg); }
+-  to   { transform: rotate(360deg); }
+-}
+-.cl-spin { animation: cl-rotate 0.9s linear infinite; }
+-
+-/* Primary button */
+-.btn-primary {
+-  display: inline-flex;
+-  align-items: center;
+-  gap: 6px;
+-  padding: 8px 18px;
+-  background: var(--accent-600);
+-  color: #fff;
+-  border: none;
+-  border-radius: var(--radius-sm);
+-  font-size: 13.5px;
+-  font-weight: 600;
+-  cursor: pointer;
+-  transition: all 0.15s ease;
+-}
+-.btn-primary:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+-.btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+-
+-/* Drawer */
+-.cl-drawer-overlay {
+-  position: fixed;
+-  inset: 0;
+-  background: rgba(10, 18, 32, 0.45);
+-  z-index: 1200;
+-  display: flex;
+-  justify-content: flex-end;
+-}
+-.cl-drawer {
+-  width: min(640px, 92vw);
+-  height: 100%;
+-  background: var(--surface);
+-  border-left: 1px solid var(--border);
+-  display: flex;
+-  flex-direction: column;
+-  box-shadow: -4px 0 24px rgba(0,0,0,0.12);
+-  animation: drawerSlide 0.2s ease-out;
+-}
+-@keyframes drawerSlide {
+-  from { transform: translateX(60px); opacity: 0; }
+-  to   { transform: translateX(0); opacity: 1; }
+-}
+-.cl-drawer-header {
+-  display: flex;
+-  align-items: flex-start;
+-  justify-content: space-between;
+-  padding: 1.25rem 1.5rem;
+-  border-bottom: 1px solid var(--border);
+-}
+-.cl-drawer-title { font-size: 16px; font-weight: 700; }
+-.cl-drawer-subtitle { font-size: 12.5px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 2px; }
+-.cl-drawer-close {
+-  display: inline-flex;
+-  align-items: center;
+-  padding: 4px;
+-  background: none;
+-  border: none;
+-  cursor: pointer;
+-  color: var(--text-muted);
+-}
+-.cl-drawer-close:hover { color: var(--text); }
+-.cl-drawer-body { flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem; }
+-.cl-drawer-meta { font-size: 13px; color: var(--text-muted); margin-bottom: 0.9rem; }
+-.cl-history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+-.cl-history-table th {
+-  text-align: left; font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em;
+-  text-transform: uppercase; color: var(--text-faint); padding: 10px 12px;
+-  background: var(--border-soft);
+-}
+-.cl-history-table td { padding: 10px 12px; border-top: 1px solid var(--border-soft); vertical-align: middle; }
+-.cl-history-table tr:hover { background: var(--border-soft); }
+-
+-/* Sync Modal */
+-.cl-modal-overlay {
+-  position: fixed;
+-  inset: 0;
+-  background: rgba(10, 18, 32, 0.6);
+-  backdrop-filter: blur(4px);
+-  z-index: 1100;
+-  display: flex;
+-  align-items: center;
+-  justify-content: center;
+-  padding: 1.5rem;
+-}
+-.cl-modal-card {
+-  background: var(--surface);
+-  border-radius: var(--radius-lg);
+-  width: 100%;
+-  max-width: 480px;
+-  border: 1px solid var(--border);
+-  box-shadow: 0 20px 40px rgba(0,0,0,0.18);
+-  overflow: hidden;
+-}
+-.cl-modal-header {
+-  display: flex;
+-  align-items: center;
+-  justify-content: space-between;
+-  padding: 1.1rem 1.4rem;
+-  border-bottom: 1px solid var(--border);
+-}
+-.cl-modal-title { font-size: 15.5px; font-weight: 700; }
+-.cl-modal-body { padding: 1.25rem 1.4rem; }
+-.cl-modal-footer {
+-  display: flex;
+-  justify-content: flex-end;
+-  gap: 10px;
+-  padding: 1rem 1.4rem;
+-  border-top: 1px solid var(--border);
+-  background: var(--border-soft);
+-}
+-
+-.cl-sync-mode-tabs {
+-  display: flex;
+-  gap: 0.5rem;
+-  margin-bottom: 1.1rem;
+-}
+-.cl-sync-mode-btn {
+-  flex: 1;
+-  display: inline-flex;
+-  align-items: center;
+-  justify-content: center;
+-  gap: 6px;
+-  padding: 8px 14px;
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-sm);
+-  background: var(--bg);
+-  font-size: 13px;
+-  font-weight: 500;
+-  cursor: pointer;
+-  color: var(--text-muted);
+-  transition: all 0.15s;
+-}
+-.cl-sync-mode-btn.active {
+-  background: var(--accent-100);
+-  color: var(--accent-600);
+-  border-color: var(--accent-500);
+-  font-weight: 600;
+-}
+-
+-.cl-form-label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 5px; }
+-.cl-form-input {
+-  width: 100%;
+-  padding: 8px 12px;
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-sm);
+-  background: var(--bg);
+-  color: var(--text);
+-  font-size: 13.5px;
+-  font-family: inherit;
+-}
+-
+-.cl-sync-result { text-align: center; padding: 0.5rem 0; }
+-.cl-sync-result-header { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 1.5rem; }
+-.cl-sync-result-status { margin-bottom: 2px; }
+-.cl-sync-result-label { font-size: 14px; font-weight: 600; }
+-
+-.cl-sync-counts {
+-  display: flex;
+-  flex-wrap: wrap;
+-  gap: 1rem;
+-  justify-content: center;
+-  margin-bottom: 1.25rem;
+-}
+-.cl-sync-count-item { text-align: center; }
+-.cl-sync-count-val { display: block; font-size: 22px; font-weight: 700; color: var(--text); }
+-.cl-sync-count-key { display: block; font-size: 11px; color: var(--text-muted); text-transform: capitalize; }
+-
+-/* Sync run expanded row */
+-.cl-run-detail {
+-  background: var(--bg);
+-  border-top: 1px solid var(--border-soft);
+-  padding: 0.75rem 0;
+-}
+-.cl-run-detail-header {
+-  font-size: 12px;
+-  color: var(--text-muted);
+-  padding: 0.5rem 1.25rem 0.75rem;
+-}
+-.cl-failure-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+-.cl-failure-table th {
+-  text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase;
+-  letter-spacing: 0.05em; color: var(--text-faint); padding: 8px 1.25rem;
+-  background: var(--border-soft);
+-}
+-.cl-failure-table td { padding: 8px 1.25rem; border-top: 1px solid var(--border-soft); vertical-align: top; }
+-
+diff --git a/Frontend/src/pages/CauseList.jsx b/Frontend/src/pages/CauseList.jsx
+deleted file mode 100644
+index f7724a3..0000000
+--- a/Frontend/src/pages/CauseList.jsx
++++ /dev/null
+@@ -1,805 +0,0 @@
+-import { useState, useEffect, useCallback, useRef } from 'react';
+-import { useSearchParams } from 'react-router-dom';
+-import {
+-  Search, Upload, RefreshCw, List, AlertTriangle, Clock,
+-  ChevronLeft, ChevronRight, X, CheckCircle2, XCircle,
+-  Info, Eye, RotateCcw, CalendarDays,
+-} from 'lucide-react';
+-import PageHeader from '../components/PageHeader.jsx';
+-import { MappedBadge, CaseStatusBadge } from '../components/StatusBadge.jsx';
+-import { useAuth } from '../context/AuthContext.jsx';
+-import {
+-  fetchCauseListEntries, fetchUnmatchedEntries, fetchSyncRuns,
+-  fetchSyncRun, fetchCaseHistory, triggerSync, retrySyncRun, triggerRematch,
+-  fetchCauseListCaseTypes,
+-} from '../api/causelist.js';
+-import './CauseList.css';
+-
+-const TABS = [
+-  { id: 'list', label: 'Cause List', icon: List },
+-  { id: 'unmatched', label: 'Unmatched', icon: AlertTriangle },
+-  { id: 'sync-logs', label: 'Sync Logs', icon: Clock },
+-];
+-
+-const MATCH_STYLES = {
+-  MATCHED: { label: 'Matched', tone: 'green' },
+-  UNMATCHED: { label: 'Unmatched', tone: 'red' },
+-  AMBIGUOUS: { label: 'Ambiguous', tone: 'orange' },
+-};
+-
+-function MatchBadge({ status }) {
+-  const s = MATCH_STYLES[status] || { label: status || '—', tone: 'neutral' };
+-  return <span className={`status-badge tone-${s.tone}`}>{s.label}</span>;
+-}
+-
+-function SyncStatusBadge({ status }) {
+-  const map = {
+-    RUNNING: { label: 'Running', tone: 'blue' },
+-    SUCCESS: { label: 'Success', tone: 'green' },
+-    PARTIAL: { label: 'Partial', tone: 'orange' },
+-    FAILED: { label: 'Failed', tone: 'red' },
+-  };
+-  const s = map[status] || { label: status, tone: 'neutral' };
+-  return <span className={`status-badge tone-${s.tone}`}>{s.label}</span>;
+-}
+-
+-function formatDate(str) {
+-  if (!str) return '—';
+-  try { return new Date(str).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' }); }
+-  catch { return str; }
+-}
+-
+-function isCancel(e) {
+-  return (
+-    e?.name === 'CanceledError' ||
+-    e?.name === 'AbortError' ||
+-    e?.code === 'ERR_CANCELED' ||
+-    e?.message === 'canceled'
+-  );
+-}
+-
+-// ─── Case History Drawer ───────────────────────────────────────────────────
+-function CaseHistoryDrawer({ cino, onClose }) {
+-  const [data, setData] = useState(null);
+-  const [loading, setLoading] = useState(true);
+-  const [error, setError] = useState(null);
+-
+-  useEffect(() => {
+-    if (!cino) return;
+-    const ctrl = new AbortController();
+-    setLoading(true);
+-    setError(null);
+-    fetchCaseHistory(cino, ctrl.signal)
+-      .then(setData)
+-      .catch((e) => { if (!isCancel(e)) setError(e.message); })
+-      .finally(() => setLoading(false));
+-    return () => ctrl.abort();
+-  }, [cino]);
+-
+-  return (
+-    <div className="cl-drawer-overlay" onClick={onClose}>
+-      <div className="cl-drawer" onClick={(e) => e.stopPropagation()}>
+-        <div className="cl-drawer-header">
+-          <div>
+-            <div className="cl-drawer-title">Case History</div>
+-            <div className="cl-drawer-subtitle">CINO: {cino}</div>
+-          </div>
+-          <button className="cl-drawer-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
+-        </div>
+-        <div className="cl-drawer-body">
+-          {loading && <div className="cl-state-box">Loading…</div>}
+-          {error && <div className="cl-state-box error">{error}</div>}
+-          {data && (
+-            <>
+-              <div className="cl-drawer-meta">
+-                <span>{data.totalAppearances} appearance{data.totalAppearances !== 1 ? 's' : ''}</span>
+-                {data.history[0]?.file && (
+-                  <span> · File: <strong>{data.history[0].file.fileId || data.history[0].file.fileName}</strong></span>
+-                )}
+-              </div>
+-              <table className="cl-history-table">
+-                <thead>
+-                  <tr>
+-                    <th>Date</th><th>Court</th><th>Serial</th><th>Case Type</th>
+-                    <th>Status</th><th>Bench</th><th>Match</th>
+-                  </tr>
+-                </thead>
+-                <tbody>
+-                  {data.history.map((e) => (
+-                    <tr key={e._id}>
+-                      <td>{e.causeListDate}</td>
+-                      <td>{e.courtNumber}</td>
+-                      <td>{e.serialNumber}</td>
+-                      <td>{e.caseType || '—'}</td>
+-                      <td><CaseStatusBadge status={e.caseStatus} /></td>
+-                      <td>{e.bench || '—'}</td>
+-                      <td><MatchBadge status={e.matchStatus} /></td>
+-                    </tr>
+-                  ))}
+-                  {data.history.length === 0 && (
+-                    <tr><td colSpan="7" className="cl-empty-cell">No history entries</td></tr>
+-                  )}
+-                </tbody>
+-              </table>
+-            </>
+-          )}
+-        </div>
+-      </div>
+-    </div>
+-  );
+-}
+-
+-// ─── Sync Dialog (Admin only) ──────────────────────────────────────────────
+-function SyncDialog({ onClose, onDone }) {
+-  const [mode, setMode] = useState('upload'); // 'upload' | 'http'
+-  const [date, setDate] = useState(() => {
+-    const d = new Date();
+-    return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
+-  });
+-  const [file, setFile] = useState(null);
+-  const [running, setRunning] = useState(false);
+-  const [result, setResult] = useState(null);
+-  const [error, setError] = useState(null);
+-  const fileRef = useRef();
+-
+-  const handleSync = async () => {
+-    setRunning(true);
+-    setError(null);
+-    setResult(null);
+-    try {
+-      const payload = mode === 'upload' ? { file, date } : { date };
+-      const run = await triggerSync(payload);
+-      setResult(run);
+-      onDone && onDone();
+-    } catch (e) {
+-      setError(e.message);
+-    } finally {
+-      setRunning(false);
+-    }
+-  };
+-
+-  return (
+-    <div className="cl-modal-overlay" onClick={onClose}>
+-      <div className="cl-modal-card" onClick={(e) => e.stopPropagation()}>
+-        <div className="cl-modal-header">
+-          <div className="cl-modal-title">Sync Cause List</div>
+-          <button className="cl-drawer-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
+-        </div>
+-        <div className="cl-modal-body">
+-          {!result && (
+-            <>
+-              <div className="cl-sync-mode-tabs">
+-                <button className={`cl-sync-mode-btn${mode === 'upload' ? ' active' : ''}`} onClick={() => setMode('upload')}>
+-                  <Upload size={15} /> File Upload
+-                </button>
+-                <button className={`cl-sync-mode-btn${mode === 'http' ? ' active' : ''}`} onClick={() => setMode('http')}>
+-                  <RefreshCw size={15} /> HTTP / API
+-                </button>
+-              </div>
+-
+-              <label className="cl-form-label">Date (YYYY-MM-DD)</label>
+-              <input
+-                type="date"
+-                className="cl-form-input"
+-                value={date}
+-                onChange={(e) => setDate(e.target.value)}
+-              />
+-
+-              {mode === 'http' && (
+-                <div className="cl-alert warning" style={{ marginTop: '0.9rem' }}>
+-                  Fetches the cause list from the court API configured on the server
+-                  (CAUSELIST_API_URL). If it is not configured, use File Upload instead.
+-                </div>
+-              )}
+-
+-              {mode === 'upload' && (
+-                <>
+-                  <label className="cl-form-label" style={{ marginTop: '0.9rem' }}>
+-                    Cause List File (XLSX / CSV / JSON)
+-                  </label>
+-                  <input
+-                    ref={fileRef}
+-                    type="file"
+-                    accept=".xlsx,.xls,.csv,.json"
+-                    className="cl-form-input"
+-                    onChange={(e) => setFile(e.target.files[0] || null)}
+-                  />
+-                </>
+-              )}
+-
+-              {error && <div className="cl-alert error">{error}</div>}
+-
+-              <div className="cl-modal-footer">
+-                <button className="btn-modal-cancel" onClick={onClose} disabled={running}>Cancel</button>
+-                <button
+-                  className="btn-primary"
+-                  onClick={handleSync}
+-                  disabled={running || !date || (mode === 'upload' && !file)}
+-                >
+-                  {running ? <><RefreshCw size={14} className="cl-spin" /> Running…</> : 'Start Sync'}
+-                </button>
+-              </div>
+-            </>
+-          )}
+-
+-          {result && (
+-            <div className="cl-sync-result">
+-              <div className="cl-sync-result-header">
+-                {result.status === 'SUCCESS' || result.status === 'PARTIAL'
+-                  ? <CheckCircle2 size={32} color="var(--green-600)" />
+-                  : <XCircle size={32} color="var(--red-600)" />}
+-                <div>
+-                  <div className="cl-sync-result-status"><SyncStatusBadge status={result.status} /></div>
+-                  <div className="cl-sync-result-label">Sync completed</div>
+-                </div>
+-              </div>
+-              <div className="cl-sync-counts">
+-                {Object.entries(result.counts || {}).map(([k, v]) => (
+-                  <div key={k} className="cl-sync-count-item">
+-                    <span className="cl-sync-count-val">{v}</span>
+-                    <span className="cl-sync-count-key">{k}</span>
+-                  </div>
+-                ))}
+-              </div>
+-              {result.failures?.length > 0 && (
+-                <div className="cl-alert warning">
+-                  {result.failures.length} row(s) failed — see Sync Logs tab for details.
+-                </div>
+-              )}
+-              <div className="cl-modal-footer">
+-                <button className="btn-primary" onClick={onClose}>Close</button>
+-              </div>
+-            </div>
+-          )}
+-        </div>
+-      </div>
+-    </div>
+-  );
+-}
+-
+-// ─── Pagination Bar ────────────────────────────────────────────────────────
+-function Pagination({ page, totalPages, total, limit, onPage }) {
+-  if (totalPages <= 1 && total <= limit) return null;
+-  return (
+-    <div className="cl-pagination">
+-      <span>{total} record{total !== 1 ? 's' : ''}</span>
+-      <div className="cl-pag-controls">
+-        <button onClick={() => onPage(page - 1)} disabled={page <= 1} className="cl-pag-btn" aria-label="Previous page">
+-          <ChevronLeft size={15} />
+-        </button>
+-        <span className="cl-pag-info">Page {page} / {totalPages}</span>
+-        <button onClick={() => onPage(page + 1)} disabled={page >= totalPages} className="cl-pag-btn" aria-label="Next page">
+-          <ChevronRight size={15} />
+-        </button>
+-      </div>
+-    </div>
+-  );
+-}
+-
+-// ─── MAIN PAGE ─────────────────────────────────────────────────────────────
+-export default function CauseList() {
+-  const { isAdmin } = useAuth();
+-  const [searchParams, setSearchParams] = useSearchParams();
+-  const tab = searchParams.get('tab') || 'list';
+-
+-  const setTab = (t) => setSearchParams((p) => { const n = new URLSearchParams(p); n.set('tab', t); n.delete('page'); return n; });
+-
+-  const [showSync, setShowSync] = useState(false);
+-  const [drawerCino, setDrawerCino] = useState(null);
+-
+-  // Notification
+-  const [notification, setNotification] = useState(null);
+-  const notify = useCallback((msg, type = 'success') => {
+-    setNotification({ msg, type });
+-    setTimeout(() => setNotification(null), 4000);
+-  }, []);
+-
+-  return (
+-    <div className="cl-page">
+-      <PageHeader
+-        title="Cause List"
+-        subtitle="Court cause list sync and file matching"
+-        actions={
+-          isAdmin ? (
+-            <button className="btn-primary" onClick={() => setShowSync(true)}>
+-              <Upload size={15} /> Sync Cause List
+-            </button>
+-          ) : null
+-        }
+-      />
+-
+-      {notification && (
+-        <div className={`cl-notification ${notification.type}`}>
+-          {notification.type === 'success' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+-          {notification.msg}
+-        </div>
+-      )}
+-
+-      {/* Tab nav */}
+-      <div className="report-nav-tabs">
+-        {TABS.map(({ id, label, icon: Icon }) => (
+-          <button
+-            key={id}
+-            className={`report-tab-btn${tab === id ? ' active' : ''}`}
+-            onClick={() => setTab(id)}
+-          >
+-            <Icon size={15} /> {label}
+-          </button>
+-        ))}
+-      </div>
+-
+-      {/* Tab content */}
+-      {tab === 'list' && <CauseListTab onRowClick={(cino) => setDrawerCino(cino)} />}
+-      {tab === 'unmatched' && <UnmatchedTab isAdmin={isAdmin} onNotify={notify} onRowClick={(cino) => setDrawerCino(cino)} />}
+-      {tab === 'sync-logs' && <SyncLogsTab isAdmin={isAdmin} onNotify={notify} />}
+-
+-      {showSync && <SyncDialog onClose={() => setShowSync(false)} onDone={() => notify('Sync completed')} />}
+-      {drawerCino && <CaseHistoryDrawer cino={drawerCino} onClose={() => setDrawerCino(null)} />}
+-    </div>
+-  );
+-}
+-
+-// ─── Cause List Tab ────────────────────────────────────────────────────────
+-function CauseListTab({ onRowClick }) {
+-  const [searchParams, setSearchParams] = useSearchParams();
+-
+-  const urlDate = searchParams.get('date') || '';
+-  const urlCourt = searchParams.get('court') || '';
+-  const urlCaseType = searchParams.get('ct') || 'ALL';
+-  const urlStatus = searchParams.get('status') || 'ALL';
+-  const urlMatch = searchParams.get('match') || 'ALL';
+-  const urlMapped = searchParams.get('mapped') || 'ALL';
+-  const urlQ = searchParams.get('q') || '';
+-  const urlPage = parseInt(searchParams.get('page'), 10) || 1;
+-
+-  const [q, setQ] = useState(urlQ);
+-  const [date, setDate] = useState(urlDate);
+-  const [court, setCourt] = useState(urlCourt);
+-  const [caseType, setCaseType] = useState(urlCaseType);
+-  const [status, setStatus] = useState(urlStatus);
+-  const [match, setMatch] = useState(urlMatch);
+-  const [mapped, setMapped] = useState(urlMapped);
+-  const [page, setPage] = useState(urlPage);
+-
+-  const [data, setData] = useState(null);
+-  const [loading, setLoading] = useState(true);
+-  const [error, setError] = useState(null);
+-  const [caseTypesList, setCaseTypesList] = useState([]);
+-
+-  const debounceRef = useRef();
+-
+-  useEffect(() => {
+-    const ctrl = new AbortController();
+-    fetchCauseListCaseTypes(ctrl.signal)
+-      .then((types) => setCaseTypesList(types || []))
+-      .catch(() => {});
+-    return () => ctrl.abort();
+-  }, [data?.total]);
+-
+-  const updateUrl = useCallback((overrides = {}) => {
+-    setSearchParams((prev) => {
+-      const n = new URLSearchParams(prev);
+-      n.set('tab', 'list');
+-      const vals = { date, court, ct: caseType, status, match, mapped, q, page, ...overrides };
+-      Object.entries(vals).forEach(([k, v]) => {
+-        if (v && v !== 'ALL' && String(v) !== '1') n.set(k, v);
+-        else n.delete(k);
+-      });
+-      if (vals.page && String(vals.page) !== '1') n.set('page', vals.page);
+-      return n;
+-    });
+-  }, [date, court, caseType, status, match, mapped, q, page, setSearchParams]);
+-
+-  const load = useCallback((overrides = {}) => {
+-    const params = {
+-      date: date || undefined,
+-      court: court || undefined,
+-      caseType: caseType !== 'ALL' ? caseType : undefined,
+-      status: status !== 'ALL' ? status : undefined,
+-      match: match !== 'ALL' ? match : undefined,
+-      mapped: mapped !== 'ALL' ? mapped : undefined,
+-      q: q || undefined,
+-      page,
+-      limit: 25,
+-      ...overrides,
+-    };
+-    // remove undefined
+-    Object.keys(params).forEach((k) => params[k] === undefined && delete params[k]);
+-
+-    const ctrl = new AbortController();
+-    setLoading(true);
+-    setError(null);
+-    fetchCauseListEntries(params, ctrl.signal)
+-      .then(setData)
+-      .catch((e) => { if (!isCancel(e)) setError(e.message); })
+-      .finally(() => setLoading(false));
+-    return () => ctrl.abort();
+-  }, [date, court, caseType, status, match, mapped, q, page]);
+-
+-  useEffect(() => { return load(); }, [load]);
+-
+-  const handleQChange = (val) => {
+-    setQ(val);
+-    clearTimeout(debounceRef.current);
+-    debounceRef.current = setTimeout(() => {
+-      setPage(1);
+-      updateUrl({ q: val, page: 1 });
+-    }, 400);
+-  };
+-
+-  const handleFilterChange = (setter, key, val) => {
+-    setter(val);
+-    setPage(1);
+-    updateUrl({ [key]: val, page: 1 });
+-  };
+-
+-  const handlePageChange = (p) => {
+-    setPage(p);
+-    updateUrl({ page: p });
+-  };
+-
+-  const clearFilters = () => {
+-    setQ(''); setDate(''); setCourt(''); setCaseType('ALL'); setStatus('ALL'); setMatch('ALL'); setMapped('ALL'); setPage(1);
+-    setSearchParams({ tab: 'list' });
+-  };
+-
+-  const hasFilters = q || date || court || caseType !== 'ALL' || status !== 'ALL' || match !== 'ALL' || mapped !== 'ALL';
+-
+-  return (
+-    <>
+-      <div className="cl-filter-bar">
+-        <div className="cl-filter-group">
+-          <div className="files-search-input" style={{ minWidth: '220px' }}>
+-            <Search size={15} />
+-            <input
+-              value={q}
+-              onChange={(e) => handleQChange(e.target.value)}
+-              placeholder="Case No / CINO / Bench"
+-            />
+-          </div>
+-          <input type="date" className="cl-date-input" value={date} onChange={(e) => handleFilterChange(setDate, 'date', e.target.value)} />
+-          <input type="text" className="cl-text-input" value={court} placeholder="Court No." onChange={(e) => handleFilterChange(setCourt, 'court', e.target.value)} style={{ width: 90 }} />
+-          <select value={caseType} onChange={(e) => handleFilterChange(setCaseType, 'ct', e.target.value)}>
+-            <option value="ALL">All Types</option>
+-            {(caseType !== 'ALL' && !caseTypesList.includes(caseType)
+-              ? [...caseTypesList, caseType]
+-              : caseTypesList
+-            ).map((t) => (
+-              <option key={t} value={t}>{t}</option>
+-            ))}
+-          </select>
+-          <select value={status} onChange={(e) => handleFilterChange(setStatus, 'status', e.target.value)}>
+-            <option value="ALL">All Statuses</option>
+-            <option value="PENDING">Pending</option>
+-            <option value="DISPOSED">Disposed</option>
+-          </select>
+-          <select value={match} onChange={(e) => handleFilterChange(setMatch, 'match', e.target.value)}>
+-            <option value="ALL">All Match</option>
+-            <option value="MATCHED">Matched</option>
+-            <option value="UNMATCHED">Unmatched</option>
+-            <option value="AMBIGUOUS">Ambiguous</option>
+-          </select>
+-          <select value={mapped} onChange={(e) => handleFilterChange(setMapped, 'mapped', e.target.value)} title="RFID mapping status">
+-            <option value="ALL">All RFID</option>
+-            <option value="true">RFID Mapped</option>
+-            <option value="false">Not Mapped</option>
+-          </select>
+-        </div>
+-        {hasFilters && (
+-          <button className="btn-clear-filters" onClick={clearFilters}><X size={13} /> Clear</button>
+-        )}
+-      </div>
+-
+-      <div className="report-table-card">
+-        {loading && <div className="cl-state-box">Loading…</div>}
+-        {error && <div className="cl-state-box error">{error}</div>}
+-        {!loading && !error && (
+-          <table style={{ width: '100%', borderCollapse: 'collapse' }} className="files-table">
+-            <thead>
+-              <tr>
+-                <th>Date</th><th>Court</th><th>Ser.</th><th>Case No / CINO</th>
+-                <th>Bench</th><th>Type</th><th>Status</th><th>Match</th>
+-                <th>RFID</th><th>Location</th><th>Rack</th>
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {(data?.items || []).map((e) => (
+-                <tr key={e._id} className="clickable-row" onClick={() => e.cino && onRowClick(e.cino)} title={e.cino ? 'Click to view case history' : ''}>
+-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{e.causeListDate}</td>
+-                  <td>{e.courtNumber}</td>
+-                  <td>{e.serialNumber}</td>
+-                  <td>
+-                    <div style={{ fontWeight: 600 }}>{e.caseNumber || '—'}</div>
+-                    {e.cino && <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{e.cino}</div>}
+-                  </td>
+-                  <td>{e.bench || '—'}</td>
+-                  <td>{e.caseType || '—'}</td>
+-                  <td><CaseStatusBadge status={e.caseStatus} /></td>
+-                  <td><MatchBadge status={e.matchStatus} /></td>
+-                  <td><MappedBadge mapped={Boolean(e.file?.rfidTag)} /></td>
+-                  <td style={{ fontSize: 11.5 }}>{e.file?.currentLocation?.replace(/_/g, ' ') || '—'}</td>
+-                  <td style={{ fontSize: 11.5, fontFamily: 'var(--font-mono)' }}>
+-                    {e.file?.rackLocation?.rack
+-                      ? `${e.file.rackLocation.rack}${e.file.rackLocation.shelf ? ' / ' + e.file.rackLocation.shelf : ''}`
+-                      : '—'}
+-                  </td>
+-                </tr>
+-              ))}
+-              {!loading && (data?.items || []).length === 0 && (
+-                <tr><td colSpan="11" className="cl-empty-cell">No files found</td></tr>
+-              )}
+-            </tbody>
+-          </table>
+-        )}
+-        {data && (
+-          <Pagination page={data.page} totalPages={data.totalPages} total={data.total} limit={data.limit} onPage={handlePageChange} />
+-        )}
+-      </div>
+-    </>
+-  );
+-}
+-
+-// ─── Unmatched Tab ─────────────────────────────────────────────────────────
+-function UnmatchedTab({ isAdmin, onNotify, onRowClick }) {
+-  const [searchParams, setSearchParams] = useSearchParams();
+-  const urlDate = searchParams.get('ud') || '';
+-  const urlPage = parseInt(searchParams.get('upage'), 10) || 1;
+-
+-  const [date, setDate] = useState(urlDate);
+-  const [page, setPage] = useState(urlPage);
+-  const [data, setData] = useState(null);
+-  const [loading, setLoading] = useState(true);
+-  const [error, setError] = useState(null);
+-  const [rematching, setRematching] = useState(false);
+-
+-  const load = useCallback(() => {
+-    const ctrl = new AbortController();
+-    setLoading(true);
+-    setError(null);
+-    fetchUnmatchedEntries({ date: date || undefined, page, limit: 25 }, ctrl.signal)
+-      .then(setData)
+-      .catch((e) => { if (!isCancel(e)) setError(e.message); })
+-      .finally(() => setLoading(false));
+-    return () => ctrl.abort();
+-  }, [date, page]);
+-
+-  useEffect(() => { return load(); }, [load]);
+-
+-  const handleRematch = async () => {
+-    setRematching(true);
+-    try {
+-      const r = await triggerRematch({ date: date || undefined });
+-      onNotify(`Re-matched ${r.rematchedCount} entries`);
+-      load();
+-    } catch (e) {
+-      onNotify(e.message, 'error');
+-    } finally {
+-      setRematching(false);
+-    }
+-  };
+-
+-  const handleDateChange = (val) => {
+-    setDate(val);
+-    setPage(1);
+-    setSearchParams((p) => { const n = new URLSearchParams(p); n.set('tab', 'unmatched'); val ? n.set('ud', val) : n.delete('ud'); n.delete('upage'); return n; });
+-  };
+-
+-  const handlePageChange = (p) => {
+-    setPage(p);
+-    setSearchParams((prev) => { const n = new URLSearchParams(prev); n.set('tab', 'unmatched'); p > 1 ? n.set('upage', p) : n.delete('upage'); return n; });
+-  };
+-
+-  return (
+-    <>
+-      <div className="cl-filter-bar">
+-        <div className="cl-filter-group">
+-          <input type="date" className="cl-date-input" value={date} onChange={(e) => handleDateChange(e.target.value)} />
+-          {date && <button className="btn-clear-filters" onClick={() => handleDateChange('')}><X size={13} /> Clear date</button>}
+-        </div>
+-        {isAdmin && (
+-          <button className="btn-action" onClick={handleRematch} disabled={rematching}>
+-            <RotateCcw size={14} className={rematching ? 'cl-spin' : ''} />
+-            {rematching ? 'Re-matching…' : 'Re-match All'}
+-          </button>
+-        )}
+-      </div>
+-
+-      {data && data.total > 0 && (
+-        <div className="cl-info-banner">
+-          <Info size={15} />
+-          <span>{data.total} unmatched / ambiguous entr{data.total !== 1 ? 'ies' : 'y'}. Admin can add CINO to the file and click Re-match.</span>
+-        </div>
+-      )}
+-
+-      <div className="report-table-card">
+-        {loading && <div className="cl-state-box">Loading…</div>}
+-        {error && <div className="cl-state-box error">{error}</div>}
+-        {!loading && !error && (
+-          <table style={{ width: '100%', borderCollapse: 'collapse' }} className="files-table">
+-            <thead>
+-              <tr>
+-                <th>Date</th><th>Court</th><th>Ser.</th><th>Case No / CINO</th>
+-                <th>Type</th><th>Status</th><th>Match</th><th>Reason</th>
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {(data?.items || []).map((e) => (
+-                <tr key={e._id} className="clickable-row" onClick={() => e.cino && onRowClick(e.cino)}>
+-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{e.causeListDate}</td>
+-                  <td>{e.courtNumber}</td>
+-                  <td>{e.serialNumber}</td>
+-                  <td>
+-                    <div style={{ fontWeight: 600 }}>{e.caseNumber || '—'}</div>
+-                    {e.cino && <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{e.cino}</div>}
+-                  </td>
+-                  <td>{e.caseType || '—'}</td>
+-                  <td><CaseStatusBadge status={e.caseStatus} /></td>
+-                  <td><MatchBadge status={e.matchStatus} /></td>
+-                  <td style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{e.matchReason || '—'}</td>
+-                </tr>
+-              ))}
+-              {(data?.items || []).length === 0 && (
+-                <tr><td colSpan="8" className="cl-empty-cell">
+-                  <CheckCircle2 size={18} style={{ color: 'var(--green-600)' }} /> All entries matched
+-                </td></tr>
+-              )}
+-            </tbody>
+-          </table>
+-        )}
+-        {data && <Pagination page={data.page} totalPages={data.totalPages} total={data.total} limit={data.limit} onPage={handlePageChange} />}
+-      </div>
+-    </>
+-  );
+-}
+-
+-// ─── Sync Logs Tab ─────────────────────────────────────────────────────────
+-function SyncLogsTab({ isAdmin, onNotify }) {
+-  const [searchParams, setSearchParams] = useSearchParams();
+-  const urlPage = parseInt(searchParams.get('lpage'), 10) || 1;
+-
+-  const [page, setPage] = useState(urlPage);
+-  const [data, setData] = useState(null);
+-  const [loading, setLoading] = useState(true);
+-  const [error, setError] = useState(null);
+-  const [expandedRun, setExpandedRun] = useState(null);
+-  const [runDetail, setRunDetail] = useState(null);
+-  const [loadingDetail, setLoadingDetail] = useState(false);
+-  const [retrying, setRetrying] = useState(null);
+-
+-  const load = useCallback(() => {
+-    const ctrl = new AbortController();
+-    setLoading(true);
+-    setError(null);
+-    fetchSyncRuns({ page, limit: 20 }, ctrl.signal)
+-      .then(setData)
+-      .catch((e) => { if (!isCancel(e)) setError(e.message); })
+-      .finally(() => setLoading(false));
+-    return () => ctrl.abort();
+-  }, [page]);
+-
+-  useEffect(() => { return load(); }, [load]);
+-
+-  const handleExpand = async (runId) => {
+-    if (expandedRun === runId) { setExpandedRun(null); setRunDetail(null); return; }
+-    setExpandedRun(runId);
+-    setRunDetail(null);
+-    setLoadingDetail(true);
+-    try {
+-      const run = await fetchSyncRun(runId);
+-      setRunDetail(run);
+-    } catch (e) {
+-      onNotify(e.message, 'error');
+-    } finally {
+-      setLoadingDetail(false);
+-    }
+-  };
+-
+-  const handleRetry = async (runId) => {
+-    setRetrying(runId);
+-    try {
+-      const r = await retrySyncRun(runId);
+-      onNotify(`Retry: ${r.retriedCount || 0} rows re-processed`);
+-      load();
+-    } catch (e) {
+-      onNotify(e.message, 'error');
+-    } finally {
+-      setRetrying(null);
+-    }
+-  };
+-
+-  const handlePageChange = (p) => {
+-    setPage(p);
+-    setSearchParams((prev) => { const n = new URLSearchParams(prev); n.set('tab', 'sync-logs'); p > 1 ? n.set('lpage', p) : n.delete('lpage'); return n; });
+-  };
+-
+-  return (
+-    <div className="report-table-card">
+-      {loading && <div className="cl-state-box">Loading…</div>}
+-      {error && <div className="cl-state-box error">{error}</div>}
+-      {!loading && !error && (
+-        <table style={{ width: '100%', borderCollapse: 'collapse' }} className="files-table">
+-          <thead>
+-            <tr>
+-              <th>Started</th><th>By</th><th>Trigger</th><th>Status</th>
+-              <th>Received</th><th>Matched</th><th>Unmatched</th><th>Failed</th><th></th>
+-            </tr>
+-          </thead>
+-          <tbody>
+-            {(data?.items || []).map((run) => (
+-              <>
+-                <tr key={run._id} className="clickable-row" onClick={() => handleExpand(run._id)}>
+-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5 }}>{formatDate(run.startedAt)}</td>
+-                  <td style={{ fontSize: 12 }}>{run.username || '—'}</td>
+-                  <td style={{ fontSize: 12 }}>{run.trigger}</td>
+-                  <td><SyncStatusBadge status={run.status} /></td>
+-                  <td>{run.counts?.received ?? '—'}</td>
+-                  <td style={{ color: 'var(--green-600)', fontWeight: 600 }}>{run.counts?.matched ?? '—'}</td>
+-                  <td style={{ color: 'var(--amber-600)', fontWeight: 600 }}>{run.counts?.unmatched ?? '—'}</td>
+-                  <td style={{ color: 'var(--red-600)', fontWeight: 600 }}>{run.counts?.failed ?? '—'}</td>
+-                  <td>
+-                    {isAdmin && (run.counts?.failed ?? 0) > 0 && (
+-                      <button
+-                        className="btn-action"
+-                        style={{ fontSize: 12 }}
+-                        onClick={(e) => { e.stopPropagation(); handleRetry(run._id); }}
+-                        disabled={retrying === run._id}
+-                      >
+-                        <RotateCcw size={12} className={retrying === run._id ? 'cl-spin' : ''} />
+-                        {retrying === run._id ? 'Retrying…' : 'Retry Failed'}
+-                      </button>
+-                    )}
+-                  </td>
+-                </tr>
+-                {expandedRun === run._id && (
+-                  <tr key={`${run._id}-detail`}>
+-                    <td colSpan="9" style={{ padding: 0 }}>
+-                      <div className="cl-run-detail">
+-                        {loadingDetail && <div style={{ padding: '1rem', color: 'var(--text-muted)' }}>Loading details…</div>}
+-                        {runDetail && (
+-                          <>
+-                            <div className="cl-run-detail-header">
+-                              Params: {runDetail.params?.date || '—'} · Duration: {
+-                                runDetail.finishedAt
+-                                  ? `${Math.round((new Date(runDetail.finishedAt) - new Date(runDetail.startedAt)) / 1000)}s`
+-                                  : 'running'
+-                              }
+-                            </div>
+-                            {(runDetail.failures || []).length === 0 && (
+-                              <div style={{ padding: '0.75rem 1.25rem', color: 'var(--text-muted)', fontSize: 13 }}>No failures recorded.</div>
+-                            )}
+-                            {(runDetail.failures || []).length > 0 && (
+-                              <table className="cl-failure-table">
+-                                <thead><tr><th>Row</th><th>Error</th><th>Retryable</th><th>Raw</th></tr></thead>
+-                                <tbody>
+-                                  {runDetail.failures.map((f, i) => (
+-                                    <tr key={i}>
+-                                      <td>{f.rowIndex ?? '—'}</td>
+-                                      <td style={{ color: 'var(--red-600)' }}>{f.error}</td>
+-                                      <td>{f.retryable ? 'Yes' : 'No'}</td>
+-                                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+-                                        {JSON.stringify(f.rawRow || {})}
+-                                      </td>
+-                                    </tr>
+-                                  ))}
+-                                </tbody>
+-                              </table>
+-                            )}
+-                          </>
+-                        )}
+-                      </div>
+-                    </td>
+-                  </tr>
+-                )}
+-              </>
+-            ))}
+-            {!loading && (data?.items || []).length === 0 && (
+-              <tr><td colSpan="9" className="cl-empty-cell">No sync runs yet</td></tr>
+-            )}
+-          </tbody>
+-        </table>
+-      )}
+-      {data && <Pagination page={data.page} totalPages={data.totalPages} total={data.total} limit={data.limit} onPage={handlePageChange} />}
+-    </div>
+-  );
+-}
+-
+diff --git a/Frontend/src/pages/Handheld.css b/Frontend/src/pages/Handheld.css
+deleted file mode 100644
+index a312e73..0000000
+--- a/Frontend/src/pages/Handheld.css
++++ /dev/null
+@@ -1,236 +0,0 @@
+-.hh-page {
+-  padding: 1.25rem 1.5rem;
+-  max-width: 900px;
+-  margin: 0 auto;
+-}
+-
+-/* Filter panel */
+-.hh-filter-panel {
+-  background: var(--surface);
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-md);
+-  padding: 1rem 1.25rem;
+-  margin-bottom: 1rem;
+-  box-shadow: var(--shadow-card);
+-}
+-
+-.hh-filter-row {
+-  display: flex;
+-  gap: 0.75rem;
+-  align-items: center;
+-  flex-wrap: wrap;
+-}
+-
+-.hh-search-box {
+-  flex: 1;
+-  min-width: 220px;
+-  display: flex;
+-  align-items: center;
+-  gap: 10px;
+-  background: var(--bg);
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-sm);
+-  padding: 0 14px;
+-  color: var(--text-muted);
+-}
+-.hh-search-box input {
+-  flex: 1;
+-  border: none;
+-  background: transparent;
+-  font-family: inherit;
+-  font-size: 15px;
+-  padding: 12px 0;
+-  color: var(--text);
+-}
+-.hh-search-box input:focus { outline: none; }
+-.hh-clear-btn { background: none; border: none; cursor: pointer; color: var(--text-muted); padding: 2px; display: flex; align-items: center; }
+-.hh-clear-btn:hover { color: var(--text); }
+-
+-.hh-date-input,
+-.hh-court-input {
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-sm);
+-  padding: 10px 12px;
+-  font-size: 14px;
+-  font-family: inherit;
+-  background: var(--bg);
+-  color: var(--text);
+-}
+-.hh-court-input { width: 100px; }
+-
+-/* Case-type chips */
+-.hh-chip-row {
+-  display: flex;
+-  flex-wrap: wrap;
+-  gap: 0.5rem;
+-  margin-top: 0.75rem;
+-}
+-.hh-chip {
+-  padding: 7px 14px;
+-  border: 1px solid var(--border);
+-  border-radius: 999px;
+-  background: var(--bg);
+-  font-size: 13px;
+-  font-weight: 500;
+-  cursor: pointer;
+-  color: var(--text-muted);
+-  transition: all 0.15s;
+-}
+-.hh-chip:hover { background: var(--border-soft); color: var(--text); }
+-.hh-chip.active {
+-  background: var(--accent-100);
+-  color: var(--accent-600);
+-  border-color: var(--accent-500);
+-  font-weight: 700;
+-}
+-
+-/* Summary strip */
+-.hh-summary-strip {
+-  display: flex;
+-  flex-wrap: wrap;
+-  align-items: center;
+-  gap: 0.75rem;
+-  padding: 0.65rem 1rem;
+-  background: var(--surface);
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-sm);
+-  margin-bottom: 1rem;
+-  font-size: 13px;
+-  color: var(--text-muted);
+-  box-shadow: var(--shadow-card);
+-}
+-.hh-summary-date { display: flex; align-items: center; gap: 5px; font-weight: 600; color: var(--text); }
+-.hh-summary-count { font-weight: 600; color: var(--text); }
+-.hh-avail-pill {
+-  font-size: 12px;
+-  font-weight: 600;
+-  padding: 3px 10px;
+-  border-radius: 999px;
+-}
+-.hh-avail-pill.tone-green  { background: var(--green-bg);  color: var(--green-600); }
+-.hh-avail-pill.tone-orange { background: var(--amber-bg);  color: var(--amber-600); }
+-.hh-avail-pill.tone-neutral{ background: var(--border-soft); color: var(--text-muted); }
+-.hh-avail-pill.tone-red    { background: var(--red-bg);    color: var(--red-600); }
+-
+-/* Card grid */
+-.hh-card-grid {
+-  display: grid;
+-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+-  gap: 0.85rem;
+-}
+-
+-/* Individual card */
+-.hh-card {
+-  background: var(--surface);
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-md);
+-  padding: 1rem 1.1rem;
+-  box-shadow: var(--shadow-card);
+-  display: flex;
+-  flex-direction: column;
+-  gap: 0.55rem;
+-  position: relative;
+-  transition: box-shadow 0.15s;
+-}
+-.hh-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+-.hh-card.tone-green  { border-left: 4px solid var(--green-600); }
+-.hh-card.tone-orange { border-left: 4px solid var(--amber-600); }
+-.hh-card.tone-neutral{ border-left: 4px solid var(--text-faint); }
+-.hh-card.tone-red    { border-left: 4px solid var(--red-600); }
+-
+-.hh-card-top {
+-  display: flex;
+-  justify-content: space-between;
+-  align-items: flex-start;
+-}
+-.hh-card-serial { font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono); }
+-.hh-card-case { }
+-.hh-card-caseno { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.3; }
+-.hh-card-cino { font-size: 12px; font-family: var(--font-mono); color: var(--text-muted); margin-top: 2px; }
+-.hh-card-type {
+-  display: inline-block;
+-  font-size: 11px;
+-  font-weight: 700;
+-  letter-spacing: 0.06em;
+-  padding: 2px 8px;
+-  border-radius: 4px;
+-  background: var(--accent-100);
+-  color: var(--accent-600);
+-}
+-.hh-card-footer {
+-  display: flex;
+-  align-items: center;
+-  gap: 0.6rem;
+-  flex-wrap: wrap;
+-  margin-top: 0.25rem;
+-}
+-.hh-card-rack {
+-  display: flex;
+-  align-items: center;
+-  gap: 5px;
+-  font-size: 13px;
+-  color: var(--text);
+-  flex: 1;
+-}
+-.hh-card-rfid {
+-  display: flex;
+-  align-items: center;
+-  gap: 4px;
+-  color: var(--text-muted);
+-}
+-.hh-rack-btn {
+-  display: inline-flex;
+-  align-items: center;
+-  gap: 5px;
+-  padding: 5px 10px;
+-  border: 1px solid var(--border);
+-  border-radius: var(--radius-sm);
+-  background: var(--bg);
+-  font-size: 12px;
+-  font-weight: 500;
+-  cursor: pointer;
+-  color: var(--text-muted);
+-  white-space: nowrap;
+-}
+-.hh-rack-btn:hover { background: var(--accent-100); color: var(--accent-600); border-color: var(--accent-500); }
+-
+-.hh-card-avail-desc {
+-  display: flex;
+-  align-items: center;
+-  gap: 5px;
+-  font-size: 11px;
+-  margin-top: 0.1rem;
+-  padding-top: 0.5rem;
+-  border-top: 1px solid var(--border-soft);
+-}
+-.hh-card-avail-desc.tone-green  { color: var(--green-600); }
+-.hh-card-avail-desc.tone-orange { color: var(--amber-600); }
+-.hh-card-avail-desc.tone-neutral{ color: var(--text-faint); }
+-.hh-card-avail-desc.tone-red    { color: var(--red-600); }
+-
+-.hh-na { color: var(--text-faint); font-style: italic; }
+-
+-/* State messages */
+-.hh-state {
+-  text-align: center;
+-  padding: 3rem 2rem;
+-  color: var(--text-muted);
+-  font-size: 15px;
+-}
+-.hh-state.error { color: var(--red-600); }
+-.hh-state.empty { color: var(--text-faint); }
+-
+-/* Re-use modal styles from CauseList */
+-.cl-modal-overlay,
+-.cl-modal-card,
+-.cl-modal-header,
+-.cl-modal-title,
+-.cl-modal-body,
+-.cl-modal-footer,
+-.cl-form-label,
+-.cl-form-input,
+-.cl-alert,
+-.cl-alert.error,
+-.cl-drawer-close,
+-.btn-modal-cancel { /* inherited via CauseList.css import in App */ }
+-
+diff --git a/Frontend/src/pages/Handheld.jsx b/Frontend/src/pages/Handheld.jsx
+deleted file mode 100644
+index ddf34ed..0000000
+--- a/Frontend/src/pages/Handheld.jsx
++++ /dev/null
+@@ -1,306 +0,0 @@
+-import { useState, useEffect, useCallback, useRef } from 'react';
+-import { Search, MapPin, Wifi, WifiOff, Package, AlertCircle, CheckCircle2, X } from 'lucide-react';
+-import PageHeader from '../components/PageHeader.jsx';
+-import { fetchHandheldCauseList, updateFileRack } from '../api/handheld.js';
+-import './Handheld.css';
+-
+-const AVAILABILITY_CONFIG = {
+-  LOCATED:  { label: 'Located',      tone: 'green',   icon: CheckCircle2, desc: 'File found — tag and rack recorded' },
+-  NO_RACK:  { label: 'Tag, No Rack', tone: 'orange',  icon: Wifi,         desc: 'RFID tagged but rack not set' },
+-  NO_RFID:  { label: 'No RFID Tag',  tone: 'neutral', icon: WifiOff,      desc: 'File exists but no RFID tag assigned' },
+-  NO_FILE:  { label: 'Unmatched',    tone: 'red',     icon: AlertCircle,  desc: 'Cause list entry — no file record found' },
+-};
+-
+-function AvailabilityBadge({ avail }) {
+-  const c = AVAILABILITY_CONFIG[avail] || { label: avail, tone: 'neutral' };
+-  return <span className={`status-badge tone-${c.tone}`}>{c.label}</span>;
+-}
+-
+-function isCancel(e) {
+-  return (
+-    e?.name === 'CanceledError' ||
+-    e?.name === 'AbortError' ||
+-    e?.code === 'ERR_CANCELED' ||
+-    e?.message === 'canceled'
+-  );
+-}
+-
+-// ─── Rack Update Modal ─────────────────────────────────────────────────────
+-function RackModal({ item, onClose, onSaved }) {
+-  const [rack, setRack] = useState(item.rackLocation?.rack || '');
+-  const [shelf, setShelf] = useState(item.rackLocation?.shelf || '');
+-  const [saving, setSaving] = useState(false);
+-  const [error, setError] = useState(null);
+-
+-  const handleSave = async () => {
+-    setSaving(true);
+-    setError(null);
+-    try {
+-      await updateFileRack(item.fileId, { rack, shelf });
+-      onSaved();
+-    } catch (e) {
+-      setError(e.message);
+-    } finally {
+-      setSaving(false);
+-    }
+-  };
+-
+-  return (
+-    <div className="cl-modal-overlay" onClick={onClose}>
+-      <div className="cl-modal-card" onClick={(e) => e.stopPropagation()}>
+-        <div className="cl-modal-header">
+-          <div className="cl-modal-title">Set Rack Location</div>
+-          <button className="cl-drawer-close" onClick={onClose} aria-label="Close"><X size={18} /></button>
+-        </div>
+-        <div className="cl-modal-body">
+-          <div style={{ marginBottom: '0.5rem', fontSize: 13, color: 'var(--text-muted)' }}>
+-            File: <strong>{item.caseNumber || item.cino || item.fileId}</strong>
+-          </div>
+-          <label className="cl-form-label" style={{ marginTop: '0.9rem' }}>Rack</label>
+-          <input
+-            className="cl-form-input"
+-            value={rack}
+-            onChange={(e) => setRack(e.target.value)}
+-            placeholder="e.g. A-12"
+-            maxLength={50}
+-          />
+-          <label className="cl-form-label" style={{ marginTop: '0.9rem' }}>Shelf (optional)</label>
+-          <input
+-            className="cl-form-input"
+-            value={shelf}
+-            onChange={(e) => setShelf(e.target.value)}
+-            placeholder="e.g. 3"
+-            maxLength={50}
+-          />
+-          {error && <div className="cl-alert error" style={{ marginTop: '0.75rem' }}>{error}</div>}
+-        </div>
+-        <div className="cl-modal-footer">
+-          <button className="btn-modal-cancel" onClick={onClose} disabled={saving}>Cancel</button>
+-          <button className="btn-primary" onClick={handleSave} disabled={saving || !rack.trim()}>
+-            {saving ? 'Saving…' : 'Save'}
+-          </button>
+-        </div>
+-      </div>
+-    </div>
+-  );
+-}
+-
+-// ─── Handheld Result Card ──────────────────────────────────────────────────
+-function ResultCard({ item, onSetRack }) {
+-  const cfg = AVAILABILITY_CONFIG[item.availability] || { label: item.availability, tone: 'neutral', icon: Package };
+-  const AvailIcon = cfg.icon;
+-
+-  return (
+-    <div className={`hh-card tone-${cfg.tone}`}>
+-      <div className="hh-card-top">
+-        <div className="hh-card-serial">#{item.serialNumber} — Court {item.courtNumber}</div>
+-        <AvailabilityBadge avail={item.availability} />
+-      </div>
+-
+-      <div className="hh-card-case">
+-        <div className="hh-card-caseno">{item.caseNumber || <span className="hh-na">No case number</span>}</div>
+-        {item.cino && <div className="hh-card-cino">{item.cino}</div>}
+-      </div>
+-
+-      {item.caseType && <div className="hh-card-type">{item.caseType}</div>}
+-
+-      <div className="hh-card-footer">
+-        <div className="hh-card-rack">
+-          <MapPin size={14} />
+-          {item.rackLocation?.rack
+-            ? <strong>{item.rackLocation.rack}{item.rackLocation.shelf ? ' / ' + item.rackLocation.shelf : ''}</strong>
+-            : <span className="hh-na">Rack not set</span>}
+-        </div>
+-        {item.rfidTag && (
+-          <div className="hh-card-rfid">
+-            <Wifi size={13} />
+-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+-              {item.rfidTag.slice(0, 12)}…
+-            </span>
+-          </div>
+-        )}
+-        {item.fileId && (
+-          <button className="hh-rack-btn" onClick={() => onSetRack(item)}>
+-            <MapPin size={13} /> Set Rack
+-          </button>
+-        )}
+-      </div>
+-
+-      <div className={`hh-card-avail-desc tone-${cfg.tone}`}>
+-        <AvailIcon size={13} /> {cfg.desc}
+-      </div>
+-    </div>
+-  );
+-}
+-
+-// ─── Main Handheld Page ────────────────────────────────────────────────────
+-export default function Handheld() {
+-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+-
+-  const [date, setDate] = useState(today);
+-  const [q, setQ] = useState('');
+-  const [caseType, setCaseType] = useState('');
+-  const [court, setCourt] = useState('');
+-
+-  const [data, setData] = useState(null);
+-  const [loading, setLoading] = useState(false);
+-  const [error, setError] = useState(null);
+-
+-  const [rackItem, setRackItem] = useState(null);
+-  const [notification, setNotification] = useState(null);
+-
+-  const debounceRef = useRef();
+-  const ctrlRef = useRef();
+-
+-  const notify = (msg, type = 'success') => {
+-    setNotification({ msg, type });
+-    setTimeout(() => setNotification(null), 4000);
+-  };
+-
+-  const load = useCallback(() => {
+-    ctrlRef.current?.abort();
+-    const ctrl = new AbortController();
+-    ctrlRef.current = ctrl;
+-    setLoading(true);
+-    setError(null);
+-    const params = {
+-      date,
+-      q: q || undefined,
+-      caseType: caseType || undefined,
+-      court: court || undefined,
+-      limit: 100,
+-    };
+-    Object.keys(params).forEach((k) => params[k] === undefined && delete params[k]);
+-    fetchHandheldCauseList(params, ctrl.signal)
+-      .then(setData)
+-      .catch((e) => { if (!isCancel(e)) setError(e.message); })
+-      .finally(() => setLoading(false));
+-  }, [date, q, caseType, court]);
+-
+-  useEffect(() => { load(); }, [load]);
+-
+-  const handleQChange = (val) => {
+-    setQ(val);
+-    clearTimeout(debounceRef.current);
+-    debounceRef.current = setTimeout(load, 400);
+-  };
+-
+-  const CASE_TYPES = ['BAIL', 'WTAX', 'CRLR', 'CRLM', 'CRLP'];
+-
+-  return (
+-    <div className="hh-page">
+-      <PageHeader
+-        title="Handheld Search"
+-        subtitle="Mobile-first cause list lookup and rack management"
+-      />
+-
+-      {notification && (
+-        <div className={`cl-notification ${notification.type}`} style={{ marginBottom: '1rem' }}>
+-          {notification.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+-          {notification.msg}
+-        </div>
+-      )}
+-
+-      {/* ── Filters ── */}
+-      <div className="hh-filter-panel">
+-        <div className="hh-filter-row">
+-          <div className="hh-search-box">
+-            <Search size={18} />
+-            <input
+-              value={q}
+-              onChange={(e) => handleQChange(e.target.value)}
+-              placeholder="Search Case No / CINO…"
+-              autoFocus
+-            />
+-            {q && <button className="hh-clear-btn" onClick={() => handleQChange('')} aria-label="Clear"><X size={15} /></button>}
+-          </div>
+-          <input
+-            type="date"
+-            className="hh-date-input"
+-            value={date}
+-            onChange={(e) => setDate(e.target.value)}
+-          />
+-        </div>
+-
+-        {/* Case type chips */}
+-        <div className="hh-chip-row">
+-          <button className={`hh-chip${caseType === '' ? ' active' : ''}`} onClick={() => setCaseType('')}>All</button>
+-          {CASE_TYPES.map((t) => (
+-            <button key={t} className={`hh-chip${caseType === t ? ' active' : ''}`} onClick={() => setCaseType(caseType === t ? '' : t)}>{t}</button>
+-          ))}
+-        </div>
+-
+-        <div className="hh-filter-row" style={{ marginTop: '0.5rem' }}>
+-          <input
+-            type="number"
+-            className="hh-court-input"
+-            value={court}
+-            onChange={(e) => setCourt(e.target.value)}
+-            placeholder="Court No."
+-            min="1"
+-            max="99"
+-          />
+-          {(q || caseType || court) && (
+-            <button className="btn-clear-filters" onClick={() => { setQ(''); setCaseType(''); setCourt(''); }}>
+-              <X size={13} /> Clear
+-            </button>
+-          )}
+-        </div>
+-      </div>
+-
+-      {/* ── Summary strip ── */}
+-      {data && (
+-        <div className="hh-summary-strip">
+-          <span className="hh-summary-date"><CalendarDays size={14} /> {data.date}</span>
+-          <span className="hh-summary-count">{data.total} record{data.total !== 1 ? 's' : ''}</span>
+-          {['LOCATED','NO_RACK','NO_RFID','NO_FILE'].map((avail) => {
+-            const count = (data.items || []).filter((i) => i.availability === avail).length;
+-            if (!count) return null;
+-            const c = AVAILABILITY_CONFIG[avail];
+-            return <span key={avail} className={`hh-avail-pill tone-${c.tone}`}>{c.label}: {count}</span>;
+-          })}
+-        </div>
+-      )}
+-
+-      {/* ── Results ── */}
+-      {loading && <div className="hh-state">Searching…</div>}
+-      {error && <div className="hh-state error">{error}</div>}
+-      {!loading && !error && data && (data.items || []).length === 0 && (
+-        <div className="hh-state empty">No files found for {data.date}</div>
+-      )}
+-      {!loading && !error && data && (data.items || []).length > 0 && (
+-        <div className="hh-card-grid">
+-          {data.items.map((item, i) => (
+-            <ResultCard key={item._id || i} item={item} onSetRack={setRackItem} />
+-          ))}
+-        </div>
+-      )}
+-
+-      {rackItem && (
+-        <RackModal
+-          item={rackItem}
+-          onClose={() => setRackItem(null)}
+-          onSaved={() => { setRackItem(null); notify('Rack location saved'); load(); }}
+-        />
+-      )}
+-    </div>
+-  );
+-}
+-
+-// Need CalendarDays for the summary strip
+-function CalendarDays({ size }) {
+-  return (
+-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+-      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+-      <line x1="16" y1="2" x2="16" y2="6"/>
+-      <line x1="8" y1="2" x2="8" y2="6"/>
+-      <line x1="3" y1="10" x2="21" y2="10"/>
+-      <line x1="8" y1="14" x2="8" y2="14"/>
+-      <line x1="12" y1="14" x2="12" y2="14"/>
+-      <line x1="16" y1="14" x2="16" y2="14"/>
+-      <line x1="8" y1="18" x2="8" y2="18"/>
+-      <line x1="12" y1="18" x2="12" y2="18"/>
+-    </svg>
+-  );
+-}
+-
+diff --git a/README.md b/README.md
+index 93a2d31..2d30466 100644
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,6 @@
+ # Allahabad High Court — RFID File-Tracking System
+ 
+-Full-stack real-time RFID tracking dashboard for legal case files inside court buildings. Tracks physical movements of case files between the **Shelf / Record Room** and **Courtrooms**, preventing misplaced records and enabling automated end-of-day audit reports, court cause list synchronizations, and mobile-friendly handheld rack management.
++Full-stack real-time RFID tracking dashboard for legal case files inside court buildings. Tracks physical movements of case files between the **Shelf / Record Room** and **Courtrooms**, preventing misplaced records, enabling automated end-of-day audit reports, and supporting handheld-reader file search.
+ 
+ ---
+ 
+@@ -14,32 +14,21 @@ Full-stack real-time RFID tracking dashboard for legal case files inside court b
+ 
+ ### 2. Advanced Multi-Parameter Search & Filters (Phase 2 & 3)
+ - Paginated search API supporting combinations of:
+-  - `q`: Regex-escaped text search across `caseNumber`, `cino`, and `fileNumber` (capped at 50 chars).
++  - `q` / `search`: Regex-escaped text search across `fileId`, `fileName`, `caseId`, `caseName`, `caseNumber`, `cino`, `fileNumber` and `rfidTag`. Each word must match at least one field (capped at 100 chars).
+   - `mapped`: Filter by RFID tag assignment (`true` or `false`).
+   - `status`: Filter by case status (`PENDING` or `DISPOSED`).
+   - `caseType`: Filter by whitelisted case types retrieved dynamically from `/api/files/case-types`.
+ - **Pending Mapping Queue**: Dedicated `/rfid-pending` page with direct tag-pairing workflow.
+ - URL-synced search state, debounced inputs (400ms), and AbortController request cancellation.
+ 
+-### 3. Court Cause List Sync & File Matching Engine (Phase 4 & 5)
+-- **Multi-Format Ingestion**: Pluggable adapter architecture supporting `.xlsx`, `.xls`, `.csv`, `.json` uploads and automated HTTP API stubs.
+-- **Smart Matching**: Automatically matches court cause list entries against files using CINO first, falling back to caseNumber normalization with duplicate protection.
+-- **Sync Runs & Audit**: Comprehensive logs tracking received, inserted, updated, matched, unmatched, and failed records with retry capabilities.
+-- **Cause List Management UI (`/cause-list`)**:
+-  - **Cause List Tab**: Filter by date, court number, case type, status, and match result with one-click case history drawer.
+-  - **Unmatched Tab**: View unmatched/ambiguous court listings with one-click "Re-match" after file CINO updates.
+-  - **Sync Logs Tab**: Detailed sync history, row-by-row error review, and one-click failure retries.
+-
+-### 4. Handheld Search & Physical Rack Management (Phase 6)
+-- **Mobile-First Search (`/handheld`)**: Large touch-friendly tap targets, instant case-type chips, court filtering, and real-time availability badges:
+-  - `LOCATED`: Tag paired and rack location assigned.
+-  - `NO_RACK`: Tag paired but rack location not yet recorded.
+-  - `NO_RFID`: File registered but RFID tag not yet paired.
+-  - `NO_FILE`: Cause list appearance with no matching physical file record.
++### 3. Handheld Reader Search (`/search`)
++- **Scan all**: scan with the handheld UHF reader and every tag in range is looked up (`POST /api/files/lookup-tags`) and shown as a file card.
++- **Find a specific file**: enter a File ID / case number / name, then scan; every other tag is ignored and a "Found it!" card appears when the file is read.
++- The reader app (UHF) must have **Send Mode = Focus** so scans are typed into the page. Responsive for phone / handheld screens.
+ - **In-Field Rack Updating**: Staff and Admin can update file rack and shelf positions via `PUT /api/files/:fileId/rack` with instant audit recording.
+ 
+-### 5. Role-Based Access Control (RBAC) & Security Hardening (Phase 7)
+-- Two roles: **Admin** (system configuration, file registration, user management, cause list sync) and **Staff** (live tracking, dwell monitors, rack updating, handheld search).
++### 4. Role-Based Access Control (RBAC) & Security Hardening (Phase 7)
++- Two roles: **Admin** (system configuration, file registration, user management) and **Staff** (live tracking, dwell monitors, rack updating, search).
+ - Hardened against NoSQL injection, parameter tampering, XSS, malformed file uploads, and unauthorized privilege escalation.
+ - Rate limits, Helmet security headers, and strict authentication on both REST endpoints and Socket.io handshakes.
+ 
+@@ -50,7 +39,7 @@ Full-stack real-time RFID tracking dashboard for legal case files inside court b
+ | Username | Password | Role | Description |
+ |---|---|---|---|
+ | `admin` | `Admin@123` | **Admin** | Full system administration, file edits, syncs, user management |
+-| `staff` | `Staff@123` | **Staff** | Day-to-day operations, movements, reports, handheld search, rack updates |
++| `staff` | `Staff@123` | **Staff** | Day-to-day operations, movements, reports, search, rack updates |
+ 
+ ---
+ 
+@@ -67,10 +56,6 @@ CLIENT_URL=http://localhost:5173
+ 
+ # Case types always listed in dropdowns (real data types are added automatically)
+ CASE_TYPES=WTAX,BAIL
+-
+-# Optional: External Cause List Integration (leave empty to use file upload)
+-# CAUSELIST_API_URL=https://your-court-causelist-api/endpoint
+-# CAUSELIST_API_KEY=your-api-key-here
+ ```
+ 
+ Create `Frontend/.env`:
+@@ -91,7 +76,7 @@ npm install
+ # 1. Create the initial admin/staff accounts and gates (no demo case files, never deletes data)
+ npm run seed
+ 
+-# 1b. If an older version already put demo files / cause list rows in your DB, remove them once:
++# 1b. If an older version already put demo files in your DB, remove them once:
+ npm run purge:demo            # dry run - only reports
+ npm run purge:demo -- --apply # deletes the demo rows
+ 
+@@ -122,11 +107,9 @@ Run automated test suites from the `Backend` directory:
+ |---|---|---|
+ | **Phase 1** | `npm run test:phase1` | File schema, optional RFID tag, sparse unique CINO/RFID indexes |
+ | **Phase 2** | `npm run test:phase2` | Combined search, filters (`mapped`, `status`, `caseType`, `q`), pagination |
+-| **Phase 4** | `npm run test:phase4` | Cause list models, CSV/XLSX parsing, CINO matching, sync retries, rematch |
+-| **Phase 6** | `npm run test:phase6` | Handheld search API, availability calculation, rack location updates |
+ | **Security** | `npm run test:security` | NoSQL injection, RBAC, JWT protection, upload validation, security headers |
+-| **End-to-End**| `npm run test:e2e` | Complete flow across all phases from registration to cause list & handheld |
+-| **Load Check**| `npm run test:load` | 5,000 files + 2,000 cause-list rows load benchmark (all queries < 10ms) |
++| **End-to-End**| `npm run test:e2e` | Complete flow from registration to scanning, reports and user management |
++| **Load Check**| `npm run test:load` | 5,000 files load benchmark (all queries < 10ms) |
+ 
+ ---
+ 
+@@ -152,19 +135,8 @@ PUT    /api/files/:fileId                    (admin-only — hardened with audit
+ PUT    /api/files/:fileId/rack               (admin & staff — update rack/shelf)
+ DELETE /api/files/:fileId                    (admin-only — soft archive)
+ POST   /api/files/bulk-upload                (admin-only — Excel/CSV import)
++POST   /api/files/lookup-tags                (admin & staff — handheld search, body: { tags: [...] })
+ 
+-# Cause List System
+-POST   /api/causelist/sync                   (admin-only — upload file or trigger HTTP sync)
+-POST   /api/causelist/sync/:runId/retry      (admin-only — retry failed sync rows)
+-POST   /api/causelist/rematch                (admin-only — rematch unmatched entries against files)
+-GET    /api/causelist                        (query: date, court, caseType, status, match, mapped, q)
+-GET    /api/causelist/unmatched              (query: date, page, limit)
+-GET    /api/causelist/sync-runs              (query: page, limit)
+-GET    /api/causelist/sync-runs/:id
+-GET    /api/causelist/history/:cino          (case appearance history)
+-
+-# Handheld Device API
+-GET    /api/handheld/causelist               (query: date, q, caseType, court, limit)
+ 
+ # Movements & Scanner Ingestion
+ POST   /api/movements                        (scanner ingestion & simulator)
+@@ -177,17 +149,3 @@ GET    /api/reports/unknown-tags?from=&to=&page=
+ GET    /api/reports/case/:caseId
+ GET    /api/reports/:type/export             (CSV stream)
+ ```
+-
+-
+----
+-
+-## 📥 Syncing the Cause List (production)
+-
+-1. Open **Cause List -> Sync Cause List** (admin only).
+-2. **File Upload:** choose a `.csv`, `.xlsx` or `.json` file. Recognised columns (any order, case-insensitive):
+-   `Cause List Date`, `Court No`, `Bench / Judge`, `Sr No`, `Case Number`, `CINO`, `Case Type`, `Status`.
+-   Dates may be `YYYY-MM-DD`, `DD-MM-YYYY` or `DD/MM/YYYY`.
+-3. **HTTP / API:** works only when `CAUSELIST_API_URL` is set in `Backend/.env`; otherwise it shows a clear error and adds nothing.
+-4. Rows are matched to existing RFID files by CINO, then Case Number (+ type). Re-syncing never creates duplicates.
+-5. Files registered or edited **after** a sync are linked to their cause list rows automatically.
+-6. Nothing is shown until real data exists: empty pages display "No files found".

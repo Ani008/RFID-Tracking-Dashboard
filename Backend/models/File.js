@@ -12,6 +12,8 @@ const fileSchema = new Schema(
     caseNumber: { type: String, required: false, trim: true },
     cino: { type: String, required: false, trim: true, uppercase: true },
     fileNumber: { type: String, required: false, trim: true },
+    // Free-text "where is this file kept" (e.g. "Room 12, Rack A-3"), shown on the handheld search screen
+    storageLocation: { type: String, required: false, trim: true, maxlength: 200 },
     caseType: { type: String, required: false, trim: true, uppercase: true },
     caseStatus: {
       type: String,

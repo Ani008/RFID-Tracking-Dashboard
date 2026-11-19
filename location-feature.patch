@@ -1,0 +1,257 @@
+diff --git a/Backend/controllers/fileController.js b/Backend/controllers/fileController.js
+index 583157c..ee40025 100644
+--- a/Backend/controllers/fileController.js
++++ b/Backend/controllers/fileController.js
+@@ -10,6 +10,7 @@ import { relinkEntriesForFile, rematchEntries } from '../services/causelist/sync
+ const VALID_LOCATIONS = ['SHELF_ROOM', 'COURT_ROOM', 'IN_TRANSIT'];
+ const VALID_CASE_STATUSES = ['PENDING', 'DISPOSED'];
+ const MAX_LOOKUP_TAGS = 500;
++const MAX_LOCATION_LENGTH = 200;
+ 
+ function validateFilePayload(body, { partial = false } = {}) {
+   const errors = [];
+@@ -36,6 +37,14 @@ function validateFilePayload(body, { partial = false } = {}) {
+     }
+   }
+ 
++  if (body.storageLocation !== undefined && body.storageLocation !== null) {
++    if (typeof body.storageLocation !== 'string') {
++      errors.push('storageLocation must be text');
++    } else if (body.storageLocation.trim().length > MAX_LOCATION_LENGTH) {
++      errors.push(`Location must be ${MAX_LOCATION_LENGTH} characters or fewer`);
++    }
++  }
++
+   return errors;
+ }
+ 
+@@ -70,6 +79,7 @@ const SEARCH_FIELDS = [
+   'caseNumber',
+   'cino',
+   'fileNumber',
++  'storageLocation',
+   'rfidTag',
+ ];
+ 
+@@ -273,6 +283,7 @@ export async function createFile(req, res, next) {
+       caseType,
+       caseStatus,
+       rackLocation,
++      storageLocation,
+     } = req.body;
+ 
+     const normalizedTag = rfidTag ? normalizeRfidTag(rfidTag) : undefined;
+@@ -308,6 +319,7 @@ export async function createFile(req, res, next) {
+       ...(normalizedCino ? { cino: normalizedCino } : {}),
+       ...(caseNumber ? { caseNumber: String(caseNumber).trim() } : {}),
+       ...(fileNumber ? { fileNumber: String(fileNumber).trim() } : {}),
++      ...(storageLocation && String(storageLocation).trim() ? { storageLocation: String(storageLocation).trim() } : {}),
+       ...(caseType ? { caseType: String(caseType).trim().toUpperCase() } : {}),
+       caseStatus: caseStatus ? String(caseStatus).trim().toUpperCase() : 'PENDING',
+       ...(rackLocation && typeof rackLocation === 'object'
+@@ -338,6 +350,7 @@ export async function createFile(req, res, next) {
+         caseNumber: file.caseNumber,
+         cino: file.cino,
+         fileNumber: file.fileNumber,
++        storageLocation: file.storageLocation,
+         caseType: file.caseType,
+         caseStatus: file.caseStatus,
+         rackLocation: file.rackLocation,
+@@ -701,6 +714,7 @@ export async function updateFile(req, res, next) {
+       'caseNumber',
+       'cino',
+       'fileNumber',
++      'storageLocation',
+       'caseType',
+       'caseStatus',
+     ];
+@@ -716,7 +730,9 @@ export async function updateFile(req, res, next) {
+         if (field === 'caseType' && typeof newVal === 'string') newVal = newVal.toUpperCase();
+         if (field === 'caseStatus' && typeof newVal === 'string') newVal = newVal.toUpperCase();
+ 
+-        if (newVal !== file[field]) {
++        // A file that never had a location and an empty box are the same thing
++        const currentVal = field === 'storageLocation' ? file[field] || '' : file[field];
++        if (newVal !== currentVal) {
+           before[field] = file[field];
+           after[field] = newVal;
+           file[field] = newVal;
+diff --git a/Backend/models/File.js b/Backend/models/File.js
+index 0a8499c..a457831 100644
+--- a/Backend/models/File.js
++++ b/Backend/models/File.js
+@@ -12,6 +12,8 @@ const fileSchema = new Schema(
+     caseNumber: { type: String, required: false, trim: true },
+     cino: { type: String, required: false, trim: true, uppercase: true },
+     fileNumber: { type: String, required: false, trim: true },
++    // Free-text "where is this file kept" (e.g. "Room 12, Rack A-3"), shown on the handheld search screen
++    storageLocation: { type: String, required: false, trim: true, maxlength: 200 },
+     caseType: { type: String, required: false, trim: true, uppercase: true },
+     caseStatus: {
+       type: String,
+diff --git a/Frontend/src/components/EditFileModal.jsx b/Frontend/src/components/EditFileModal.jsx
+index 641556d..395dc04 100644
+--- a/Frontend/src/components/EditFileModal.jsx
++++ b/Frontend/src/components/EditFileModal.jsx
+@@ -13,6 +13,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
+     caseNumber: '',
+     cino: '',
+     fileNumber: '',
++    storageLocation: '',
+     caseType: '',
+     caseStatus: 'PENDING',
+     reason: '',
+@@ -30,6 +31,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
+         caseNumber: file.caseNumber || '',
+         cino: file.cino || '',
+         fileNumber: file.fileNumber || '',
++        storageLocation: file.storageLocation || '',
+         caseType: file.caseType || '',
+         caseStatus: file.caseStatus || 'PENDING',
+         reason: '',
+@@ -60,6 +62,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
+         caseNumber: formData.caseNumber.trim(),
+         cino: formData.cino.trim().toUpperCase(),
+         fileNumber: formData.fileNumber.trim(),
++        storageLocation: formData.storageLocation.trim(),
+         caseType: formData.caseType.trim().toUpperCase(),
+         caseStatus: formData.caseStatus,
+         reason: formData.reason.trim(),
+@@ -218,6 +221,25 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
+               />
+             </div>
+ 
++            {/* Location (free text, shown on the handheld search screen) */}
++            <div className="edit-field">
++              <label className="edit-field-label" htmlFor="edit-storageLocation">
++                Location
++              </label>
++              <input
++                id="edit-storageLocation"
++                type="text"
++                className="edit-field-input"
++                placeholder="e.g. Room 12, Rack A-3, Shelf 2"
++                maxLength={200}
++                value={formData.storageLocation}
++                onChange={(e) => setFormData({ ...formData, storageLocation: e.target.value })}
++              />
++              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
++                Where this file is kept. Shown on the handheld search screen.
++              </span>
++            </div>
++
+             {/* Paired RFID Tag */}
+             <div className="edit-field">
+               <label className="edit-field-label" htmlFor="edit-rfidTag">
+diff --git a/Frontend/src/components/FileDetailModal.jsx b/Frontend/src/components/FileDetailModal.jsx
+index e19048e..82fe303 100644
+--- a/Frontend/src/components/FileDetailModal.jsx
++++ b/Frontend/src/components/FileDetailModal.jsx
+@@ -69,6 +69,10 @@ export default function FileDetailModal({ fileId, onClose, onFileUpdated }) {
+                 <span className="modal-meta-label">RFID EPC Tag</span>
+                 <span className="mono" style={{ fontWeight: 600 }}>{data.file.rfidTag}</span>
+               </div>
++              <div>
++                <span className="modal-meta-label">Location</span>
++                <span style={{ fontWeight: 600 }}>{data.file.storageLocation || '—'}</span>
++              </div>
+               <div>
+                 <span className="modal-meta-label">Last Movement</span>
+                 <span>
+diff --git a/Frontend/src/pages/CaseFiles.jsx b/Frontend/src/pages/CaseFiles.jsx
+index 49f21dd..dd5beee 100644
+--- a/Frontend/src/pages/CaseFiles.jsx
++++ b/Frontend/src/pages/CaseFiles.jsx
+@@ -347,6 +347,11 @@ export default function CaseFiles() {
+                   </td>
+                   <td onClick={() => setSelectedFileId(f.fileId)}>
+                     <div><LocationBadge location={f.currentLocation} /></div>
++                    {f.storageLocation && (
++                      <div style={{ fontSize: '11px', color: 'var(--text)', marginTop: '4px', fontWeight: 600 }}>
++                        {f.storageLocation}
++                      </div>
++                    )}
+                     {f.rackLocation?.rack && (
+                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                         Rack: {f.rackLocation.rack} {f.rackLocation.shelf ? `(${f.rackLocation.shelf})` : ''}
+diff --git a/Frontend/src/pages/RegisterFile.jsx b/Frontend/src/pages/RegisterFile.jsx
+index 863a868..455247b 100644
+--- a/Frontend/src/pages/RegisterFile.jsx
++++ b/Frontend/src/pages/RegisterFile.jsx
+@@ -5,7 +5,7 @@ import { useScannerSocket } from '../hooks/useScannerSocket.js';
+ import { normalizeRfidTag } from '../utils/rfid.js';
+ import '../styles/forms.css';
+ 
+-const EMPTY_FORM = { fileId: '', fileName: '', caseId: '', rfidTag: '' };
++const EMPTY_FORM = { fileId: '', fileName: '', caseId: '', storageLocation: '', rfidTag: '' };
+ 
+ export default function RegisterFile() {
+   const [form, setForm] = useState(EMPTY_FORM);
+@@ -37,6 +37,7 @@ export default function RegisterFile() {
+     try {
+       const normalizedPayload = {
+         ...form,
++        storageLocation: form.storageLocation.trim(),
+         rfidTag: normalizeRfidTag(form.rfidTag),
+       };
+       const file = await createFile(normalizedPayload);
+@@ -129,6 +130,17 @@ export default function RegisterFile() {
+               required
+             />
+           </div>
++          <div className="field">
++            <label htmlFor="storageLocation">Location</label>
++            <input
++              id="storageLocation"
++              value={form.storageLocation}
++              onChange={(e) => update('storageLocation', e.target.value)}
++              placeholder="Room 12, Rack A-3, Shelf 2"
++              maxLength={200}
++            />
++            <span className="field-hint">Where this file is kept. Shown on the handheld search screen.</span>
++          </div>
+           <div className="field full">
+             <label htmlFor="rfidTag">RFID Tag (EPC)</label>
+             <input
+diff --git a/Frontend/src/pages/Search.css b/Frontend/src/pages/Search.css
+index 7e2bbbe..e675c0c 100644
+--- a/Frontend/src/pages/Search.css
++++ b/Frontend/src/pages/Search.css
+@@ -221,4 +221,20 @@ button.result-card:hover { border-color: var(--accent-500); }
+   .result-time { align-self: flex-start; }
+   .find-launch { width: 100%; justify-content: center; padding: 14px 18px; font-size: 15px; }
+   .scan-title { font-size: 16px; }
+-}
+\ No newline at end of file
++}
++.result-location {
++  margin-top: 10px;
++  padding: 10px 12px;
++  background: var(--accent-100);
++  border-radius: var(--radius-sm);
++}
++.result-location span {
++  display: block;
++  font-size: 11px;
++  font-weight: 700;
++  text-transform: uppercase;
++  letter-spacing: 0.04em;
++  color: var(--accent-600);
++}
++.result-location strong { font-size: 16px; word-break: break-word; }
++.result-card.featured .result-location strong { font-size: 20px; }
+diff --git a/Frontend/src/pages/Search.jsx b/Frontend/src/pages/Search.jsx
+index 955ec40..9ed0ee4 100644
+--- a/Frontend/src/pages/Search.jsx
++++ b/Frontend/src/pages/Search.jsx
+@@ -469,6 +469,10 @@ function ResultCard({ scan, featured = false, onOpen }) {
+           )}
+         </div>
+         <div className="result-name">{file.fileName}</div>
++        <div className="result-location">
++          <span>Location</span>
++          <strong>{file.storageLocation || 'Not set'}</strong>
++        </div>
+         <div className="result-grid">
+           <div><span>File ID</span><strong className="mono">{file.fileId}</strong></div>
+           <div><span>Case</span><strong>{file.caseId}{file.caseName ? ` — ${file.caseName}` : ''}</strong></div>

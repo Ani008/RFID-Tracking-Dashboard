@@ -469,6 +469,10 @@ function ResultCard({ scan, featured = false, onOpen }) {
           )}
         </div>
         <div className="result-name">{file.fileName}</div>
+        <div className="result-location">
+          <span>Location</span>
+          <strong>{file.storageLocation || 'Not set'}</strong>
+        </div>
         <div className="result-grid">
           <div><span>File ID</span><strong className="mono">{file.fileId}</strong></div>
           <div><span>Case</span><strong>{file.caseId}{file.caseName ? ` — ${file.caseName}` : ''}</strong></div>

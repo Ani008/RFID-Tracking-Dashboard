@@ -1,13 +1,12 @@
 import 'dotenv/config';
 import mongoose from 'mongoose';
 import File from '../models/File.js';
-import CauseListEntry from '../models/CauseListEntry.js';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/rfid-tracker';
 
 async function runLoadCheck() {
   console.log('================================================================');
-  console.log('⚡ RUNNING PERFORMANCE & LOAD BENCHMARK (5,000 FILES + 2,000 CAUSELIST ROWS)');
+  console.log('⚡ RUNNING PERFORMANCE & LOAD BENCHMARK (5,000 FILES)');
   console.log('================================================================\n');
 
   await mongoose.connect(MONGODB_URI);
@@ -15,10 +14,8 @@ async function runLoadCheck() {
 
   // Verify indexes
   await File.syncIndexes();
-  await CauseListEntry.syncIndexes();
 
   const LOAD_PREFIX = 'BENCH_LOAD_';
-  const BATCH_DATE = '2026-11-20';
 
   console.log('Generating 5,000 synthetic files...');
   const filesToInsert = [];
@@ -49,29 +46,6 @@ async function runLoadCheck() {
   const fileInsertStart = Date.now();
   await File.insertMany(filesToInsert, { ordered: false });
   console.log(`✓ 5,000 files inserted in ${Date.now() - fileInsertStart}ms`);
-
-  console.log('Generating 2,000 synthetic cause-list entries...');
-  const entriesToInsert = [];
-  for (let i = 1; i <= 2000; i++) {
-    const court = String((i % 30) + 1);
-    const serial = Math.floor(i / 30) + 1;
-    entriesToInsert.push({
-      causeListDate: BATCH_DATE,
-      courtNumber: court,
-      bench: `Court ${court} Bench`,
-      serialNumber: serial,
-      caseNumber: `WP/BENCH/${i}/2026`,
-      cino: `${LOAD_PREFIX}CINO_${i}`,
-      dedupeKey: `${LOAD_PREFIX}CINO_${i}`,
-      caseType: caseTypes[i % caseTypes.length],
-      caseStatus: caseStatuses[i % caseStatuses.length],
-      matchStatus: 'MATCHED',
-    });
-  }
-
-  const clInsertStart = Date.now();
-  await CauseListEntry.insertMany(entriesToInsert, { ordered: false });
-  console.log(`✓ 2,000 cause-list entries inserted in ${Date.now() - clInsertStart}ms\n`);
 
   // ─── Query 1: Filtered Files by compound {caseType, caseStatus} + paging ────
   console.log('--- [Query 1] File search: caseType="BAIL" & caseStatus="PENDING" (compound index) ---');
@@ -113,38 +87,10 @@ async function runLoadCheck() {
   console.log(`  Returned: ${q3Stats.nReturned}`);
   if (q3Time > 500) throw new Error(`Query 3 exceeded 500ms limit: ${q3Time}ms`);
 
-  // ─── Query 4: Cause List by Date & Court (compound index) ───────────────────
-  console.log('\n--- [Query 4] Cause List for date & court sorted by serial ---');
-  const q4Start = Date.now();
-  const q4Explain = await CauseListEntry.find({ causeListDate: BATCH_DATE, courtNumber: '5' })
-    .sort({ serialNumber: 1 })
-    .limit(50)
-    .explain('executionStats');
-  const q4Time = Date.now() - q4Start;
-  const q4Stats = q4Explain.executionStats;
-  console.log(`  Execution Time: ${q4Time}ms (MongoDB execution: ${q4Stats.executionTimeMillis}ms)`);
-  console.log(`  Stage: ${q4Stats.executionStages.stage}`);
-  console.log(`  Total Docs Examined: ${q4Stats.totalDocsExamined}, Returned: ${q4Stats.nReturned}`);
-  if (q4Time > 500) throw new Error(`Query 4 exceeded 500ms limit: ${q4Time}ms`);
-
-  // ─── Query 5: Handheld Cause List Lookup (date sorted by court and serial) ──
-  console.log('\n--- [Query 5] Handheld Cause List Lookup for date (up to 100 rows) ---');
-  const q5Start = Date.now();
-  const q5Explain = await CauseListEntry.find({ causeListDate: BATCH_DATE })
-    .sort({ courtNumber: 1, serialNumber: 1 })
-    .limit(100)
-    .explain('executionStats');
-  const q5Time = Date.now() - q5Start;
-  const q5Stats = q5Explain.executionStats;
-  console.log(`  Execution Time: ${q5Time}ms (MongoDB execution: ${q5Stats.executionTimeMillis}ms)`);
-  console.log(`  Total Docs Examined: ${q5Stats.totalDocsExamined}, Returned: ${q5Stats.nReturned}`);
-  if (q5Time > 500) throw new Error(`Query 5 exceeded 500ms limit: ${q5Time}ms`);
-
   // ─── Cleanup benchmark data ────────────────────────────────────────────────
   console.log('\nCleaning up benchmark datasets...');
   const delFiles = await File.deleteMany({ fileId: new RegExp(`^${LOAD_PREFIX}`) });
-  const delEntries = await CauseListEntry.deleteMany({ causeListDate: BATCH_DATE });
-  console.log(`✓ Deleted ${delFiles.deletedCount} files and ${delEntries.deletedCount} cause list entries`);
+  console.log(`✓ Deleted ${delFiles.deletedCount} files`);
 
   await mongoose.disconnect();
   console.log('\n================================================================');

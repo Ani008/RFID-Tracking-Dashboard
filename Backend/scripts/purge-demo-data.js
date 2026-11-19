@@ -1,13 +1,10 @@
 import 'dotenv/config';
 import mongoose from 'mongoose';
 import File from '../models/File.js';
-import CauseListEntry from '../models/CauseListEntry.js';
-import SyncRun from '../models/SyncRun.js';
 import MovementLog from '../models/MovementLog.js';
 
 /**
- * One-time cleanup of the demo data that older versions of seed.js and the
- * cause-list HTTP stub inserted.
+ * One-time cleanup of the demo data that older versions of seed.js inserted.
  *
  *   node scripts/purge-demo-data.js            -> DRY RUN (only reports)
  *   node scripts/purge-demo-data.js --apply    -> actually deletes
@@ -40,19 +37,11 @@ async function run() {
   const demoFileIds = demoFiles.map((f) => f.fileId);
   const demoFileObjectIds = demoFiles.map((f) => f._id);
 
-  // 2. Cause list entries created from the stub or linked to demo files
-  const demoEntries = await CauseListEntry.find({
-    $or: [{ cino: { $in: DEMO_CINOS } }, { file: { $in: demoFileObjectIds } }],
-  }).select('syncRunId');
-  const entryIds = demoEntries.map((e) => e._id);
-  const touchedRunIds = [...new Set(demoEntries.map((e) => String(e.syncRunId)).filter(Boolean))];
-
-  // 3. Movement logs for demo files
+  // 2. Movement logs for demo files
   const movementCount = await MovementLog.countDocuments({ fileId: { $in: demoFileIds } });
 
   console.log(`[purge] demo case files found:        ${demoFiles.length}`);
   demoFiles.forEach((f) => console.log(`          - ${f.fileId}  ${f.caseNumber}  ${f.cino}`));
-  console.log(`[purge] cause list entries found:     ${demoEntries.length}`);
   console.log(`[purge] movement logs found:          ${movementCount}`);
 
   if (!APPLY) {
@@ -61,22 +50,10 @@ async function run() {
     return;
   }
 
-  const entriesRes = await CauseListEntry.deleteMany({ _id: { $in: entryIds } });
   const movesRes = await MovementLog.deleteMany({ fileId: { $in: demoFileIds } });
   const filesRes = await File.deleteMany({ _id: { $in: demoFileObjectIds } });
 
-  // 4. Sync runs that only produced demo entries (no remaining entries reference them)
-  let runsDeleted = 0;
-  for (const runId of touchedRunIds) {
-    const remaining = await CauseListEntry.countDocuments({ syncRunId: runId });
-    if (remaining === 0) {
-      await SyncRun.deleteOne({ _id: runId });
-      runsDeleted++;
-    }
-  }
-
-  console.log(`[purge] deleted: ${filesRes.deletedCount} files, ${entriesRes.deletedCount} cause list entries, ` +
-    `${movesRes.deletedCount} movement logs, ${runsDeleted} sync runs`);
+  console.log(`[purge] deleted: ${filesRes.deletedCount} files, ${movesRes.deletedCount} movement logs`);
 
   await mongoose.disconnect();
   console.log('[purge] done');

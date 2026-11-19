@@ -13,6 +13,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
     caseNumber: '',
     cino: '',
     fileNumber: '',
+    storageLocation: '',
     caseType: '',
     caseStatus: 'PENDING',
     reason: '',
@@ -30,6 +31,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
         caseNumber: file.caseNumber || '',
         cino: file.cino || '',
         fileNumber: file.fileNumber || '',
+        storageLocation: file.storageLocation || '',
         caseType: file.caseType || '',
         caseStatus: file.caseStatus || 'PENDING',
         reason: '',
@@ -60,6 +62,7 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
         caseNumber: formData.caseNumber.trim(),
         cino: formData.cino.trim().toUpperCase(),
         fileNumber: formData.fileNumber.trim(),
+        storageLocation: formData.storageLocation.trim(),
         caseType: formData.caseType.trim().toUpperCase(),
         caseStatus: formData.caseStatus,
         reason: formData.reason.trim(),
@@ -216,6 +219,25 @@ export default function EditFileModal({ file, onClose, onSaveSuccess }) {
                 value={formData.fileNumber}
                 onChange={(e) => setFormData({ ...formData, fileNumber: e.target.value })}
               />
+            </div>
+
+            {/* Location (free text, shown on the handheld search screen) */}
+            <div className="edit-field">
+              <label className="edit-field-label" htmlFor="edit-storageLocation">
+                Location
+              </label>
+              <input
+                id="edit-storageLocation"
+                type="text"
+                className="edit-field-input"
+                placeholder="e.g. Room 12, Rack A-3, Shelf 2"
+                maxLength={200}
+                value={formData.storageLocation}
+                onChange={(e) => setFormData({ ...formData, storageLocation: e.target.value })}
+              />
+              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                Where this file is kept. Shown on the handheld search screen.
+              </span>
             </div>
 
             {/* Paired RFID Tag */}

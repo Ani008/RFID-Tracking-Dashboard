@@ -21,7 +21,10 @@
 
 const WINDOW_MS = 2000; // sliding window used to compute reads/second
 const HOLD_MS = 5000; // keep showing the tag (fading) this long after its last read
-const MIN_PEAK_RATE = 4; // don't let a single stray read look like "right here"
+// Reads/second that count as "touching the reader". The handheld sends far fewer
+// than a raw UHF module would, so this is low; the radar also raises it on its
+// own if the reader turns out to be faster. Adjustable at runtime (setMinPeak).
+const DEFAULT_MIN_PEAK_RATE = 1.5;
 const FLOOR = 0.08; // a tag seen within HOLD_MS never fades below this
 
 // Typical UHF handheld RSSI range: ~ -75 dBm (edge of range) .. -30 dBm (touching)
@@ -37,8 +40,12 @@ export function createProximityTracker() {
   let lastReadAt = 0;
   let lastTarget = 0;
   let totalReads = 0;
+  let minPeak = DEFAULT_MIN_PEAK_RATE;
 
   return {
+    /** Lower = dot reaches the centre with fewer reads/s (more sensitive). */
+    setMinPeak(v) { minPeak = v; },
+
     /** Call for EVERY read of the target tag (before any de-duplication). */
     record(rssi = null, now = Date.now()) {
       reads.push({ t: now, rssi: Number.isFinite(rssi) ? rssi : null });
@@ -58,7 +65,7 @@ export function createProximityTracker() {
       if (age <= WINDOW_MS) {
         rate = reads.length / (WINDOW_MS / 1000);
         peakRate = Math.max(peakRate, rate);
-        const rateStrength = clamp01(rate / Math.max(peakRate, MIN_PEAK_RATE));
+        const rateStrength = clamp01(rate / Math.max(peakRate, minPeak));
         const rssis = reads.filter((r) => r.rssi !== null).map((r) => r.rssi);
         hasRssi = rssis.length > 0;
         const rssiStrength = hasRssi

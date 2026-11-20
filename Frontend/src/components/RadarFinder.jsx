@@ -21,6 +21,14 @@ export default function RadarFinder({ tracker, fileLabel }) {
   const [state, setState] = useState({ strength: 0, active: false, rate: 0, hasRssi: false, totalReads: 0, everSeen: false, seenAgo: null });
   const [muted, setMuted] = useState(false);
   const beeper = useRef(null);
+  // Reads/s that count as "touching the reader": lower = dot gets to the centre sooner.
+  const SENS = [
+    { label: 'Low', minPeak: 3 },
+    { label: 'Medium', minPeak: 1.5 },
+    { label: 'High', minPeak: 0.8 },
+  ];
+  const [sens, setSens] = useState(1);
+  useEffect(() => { tracker.setMinPeak(SENS[sens].minPeak); }, [tracker, sens]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const b = createBeeper();
@@ -101,6 +109,15 @@ export default function RadarFinder({ tracker, fileLabel }) {
           </g>
         </g>
       </svg>
+
+      <button
+        type="button"
+        className="radar-sens"
+        onClick={(e) => { e.stopPropagation(); setSens((s) => (s + 1) % SENS.length); }}
+        title="If the dot shows 'Far' even when the file is touching the reader, raise this"
+      >
+        Sensitivity: <strong>{SENS[sens].label}</strong>
+      </button>
 
       <div className="radar-readout">
         <div className="radar-label">{proximityLabel(strength, active, everSeen)}</div>

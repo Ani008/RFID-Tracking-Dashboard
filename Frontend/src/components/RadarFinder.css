@@ -44,3 +44,11 @@
 @media (prefers-reduced-motion: reduce) {
   .radar-sweep, .radar-target-halo { animation: none; }
 }
+
+.radar-sens {
+  padding: 6px 12px; font-size: 12px; font-family: inherit;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 99px;
+  color: var(--text-muted); cursor: pointer;
+}
+.radar-sens strong { color: var(--text); }
+.radar-sens:hover { border-color: var(--accent-500); }

@@ -225,3 +225,38 @@
   flex-direction: column;
   gap: 3px;
 }
+
+@media (max-width: 640px) {
+  .modal-panel {
+    padding: 20px 16px 18px;
+    max-height: 90vh;
+    border-radius: 14px;
+    margin: 10px;
+  }
+
+  .modal-header {
+    padding-right: 24px;
+  }
+
+  .modal-meta {
+    gap: 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .modal-meta > div {
+    min-width: 0;
+  }
+
+  .modal-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 4px;
+  }
+
+  .modal-tab-btn {
+    white-space: nowrap;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+}

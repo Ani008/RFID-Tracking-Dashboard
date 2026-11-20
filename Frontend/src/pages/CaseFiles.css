@@ -309,3 +309,53 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+@media (max-width: 768px) {
+  .files-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .files-filter-group {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: 8px;
+  }
+
+  .files-search-input {
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .files-toolbar select {
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .btn-clear-filters {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .files-table {
+    min-width: 720px;
+  }
+
+  .delete-modal-card {
+    width: 100%;
+    max-width: 100%;
+    margin: 10px;
+  }
+
+  .delete-modal-footer {
+    flex-direction: column-reverse;
+    gap: 8px;
+  }
+
+  .delete-modal-footer button {
+    width: 100%;
+    justify-content: center;
+  }
+}

@@ -8,6 +8,11 @@ const SIZE = 280;
 const C = SIZE / 2;
 const R_MAX = 118; // outermost ring
 const R_MIN = 16; // dot never covers the centre reader icon
+const SENS = [
+  { label: 'Low', exp: 1.8 },
+  { label: 'Medium', exp: 1 },
+  { label: 'High', exp: 0.55 },
+];
 
 /**
  * Radar-style finder. The centre is the handheld reader; the yellow dot is the
@@ -18,17 +23,12 @@ const R_MIN = 16; // dot never covers the centre reader icon
  * dot's angle is cosmetic. Distance (and the beeps) are the real information.
  */
 export default function RadarFinder({ tracker, fileLabel }) {
-  const [state, setState] = useState({ strength: 0, active: false, rate: 0, hasRssi: false, totalReads: 0, everSeen: false, seenAgo: null });
+  const [state, setState] = useState({ strength: 0, active: false, interval: 1, hasRssi: false, totalReads: 0, everSeen: false, seenAgo: null });
   const [muted, setMuted] = useState(false);
   const beeper = useRef(null);
-  // Reads/s that count as "touching the reader": lower = dot gets to the centre sooner.
-  const SENS = [
-    { label: 'Low', minPeak: 3 },
-    { label: 'Medium', minPeak: 1.5 },
-    { label: 'High', minPeak: 0.8 },
-  ];
+  // Curve exponent: lower = the dot gets to the centre sooner.
   const [sens, setSens] = useState(1);
-  useEffect(() => { tracker.setMinPeak(SENS[sens].minPeak); }, [tracker, sens]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { tracker.setSensitivity(SENS[sens].exp); }, [tracker, sens]);
 
   useEffect(() => {
     const b = createBeeper();
@@ -47,7 +47,7 @@ export default function RadarFinder({ tracker, fileLabel }) {
 
   useEffect(() => { beeper.current?.setMuted(muted); }, [muted]);
 
-  const { strength, active, rate, hasRssi, totalReads, everSeen, seenAgo } = state;
+  const { strength, active, interval, hasRssi, totalReads, everSeen, seenAgo } = state;
   const dist = R_MIN + (1 - strength) * (R_MAX - R_MIN);
   const angle = (-50 * Math.PI) / 180;
   const dx = C + Math.cos(angle) * dist;
@@ -124,7 +124,7 @@ export default function RadarFinder({ tracker, fileLabel }) {
         <div className="radar-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></div>
         <div className="radar-sub">
           {everSeen
-            ? `${pct}% signal · ${rate} reads/s · ${totalReads} read${totalReads === 1 ? '' : 's'} total · last ${seenAgo}s ago${hasRssi ? ' · RSSI on' : ''}`
+            ? `${pct}% signal · reader beat ~${interval}s · ${totalReads} read${totalReads === 1 ? '' : 's'} total · last ${seenAgo}s ago${hasRssi ? ' · RSSI on' : ''}`
             : 'Hold the trigger and move the reader around. Closer = faster beeps.'}
         </div>
       </div>

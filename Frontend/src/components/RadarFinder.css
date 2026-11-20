@@ -1,0 +1,46 @@
+.radar {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
+  padding: 18px 16px 20px; margin-bottom: 14px;
+}
+.radar-svg { width: min(100%, 300px); height: auto; display: block; }
+
+.radar-ring { fill: none; stroke: #2f7a4c; stroke-opacity: .55; stroke-width: 1; }
+.radar-axis { stroke: #2f7a4c; stroke-opacity: .35; stroke-width: 1; }
+
+.radar-sweep { animation: radar-spin 3s linear infinite; }
+@keyframes radar-spin { to { transform: rotate(360deg); } }
+
+.radar-target { transition: transform .25s ease-out; }
+.radar-target-dot { fill: #facc15; stroke: #fff7c2; stroke-width: 1.5; }
+.radar-target-halo { fill: #facc15; fill-opacity: .22; animation: radar-pulse 1s ease-in-out infinite; }
+@keyframes radar-pulse { 50% { fill-opacity: .06; } }
+
+.radar-center-bg { fill: #0a1a12; stroke: #4ade80; stroke-width: 1.5; }
+.radar-reader { stroke: #4ade80; stroke-width: 1.6; }
+
+.radar-readout { width: 100%; max-width: 320px; text-align: center; }
+.radar-label { font-size: 20px; font-weight: 700; color: var(--text); }
+.radar-hot .radar-label { color: var(--green-600); }
+.radar-warm .radar-label { color: var(--amber-600); }
+.radar-cold .radar-label { color: var(--text-muted); }
+
+.radar-bar { height: 8px; margin: 8px 0 6px; background: var(--border-soft); border-radius: 99px; overflow: hidden; }
+.radar-bar span { display: block; height: 100%; background: #facc15; border-radius: 99px; transition: width .2s ease-out; }
+.radar-hot .radar-bar span { background: var(--green-600); }
+
+.radar-sub { font-size: 12px; color: var(--text-muted); }
+
+.radar-mute {
+  position: absolute; top: 10px; right: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer;
+}
+.radar-mute:hover { color: var(--text); border-color: var(--accent-500); }
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-sweep, .radar-target-halo { animation: none; }
+}

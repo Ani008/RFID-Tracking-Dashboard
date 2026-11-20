@@ -4,7 +4,9 @@ import PageHeader from '../components/PageHeader.jsx';
 import { LocationBadge } from '../components/StatusBadge.jsx';
 import FileDetailModal from '../components/FileDetailModal.jsx';
 import { lookupTags, fetchFiles } from '../api/files.js';
+import RadarFinder from '../components/RadarFinder.jsx';
 import { normalizeRfidTag } from '../utils/rfid.js';
+import { createProximityTracker } from '../utils/proximity.js';
 import './Search.css';
 
 // Wedge readers type a whole tag in a few ms. If no Enter suffix is configured
@@ -36,6 +38,9 @@ export default function Search() {
   const inputRef = useRef(null);
   const idleTimer = useRef(null);
   const lastSeen = useRef(new Map()); // tag -> timestamp of last lookup
+  // Collects every read of the file being hunted (before de-duplication) so the
+  // radar can turn read-rate / RSSI into a distance feel.
+  const tracker = useRef(createProximityTracker()).current;
 
   const [manualMode, setManualMode] = useState(false);
   const [value, setValue] = useState('');
@@ -58,12 +63,14 @@ export default function Search() {
 
   const focusInput = useCallback(() => inputRef.current?.focus(), []);
 
-  const processScan = useCallback(async (raw) => {
+  const processScan = useCallback(async (raw, rssi = null) => {
     const now = Date.now();
     const tags = [];
     for (const piece of splitScan(raw)) {
       const tag = normalizeRfidTag(piece);
       if (tag.length < MIN_TAG_LENGTH) continue;
+      // Radar: count every read of the target, even the repeats we skip below.
+      if (mode === 'find' && targets.some((f) => f.rfidTag === tag)) tracker.record(rssi, now);
       const last = lastSeen.current.get(tag);
       if (last && now - last < REPEAT_WINDOW_MS) continue;
       lastSeen.current.set(tag, now);
@@ -129,7 +136,21 @@ export default function Search() {
     } finally {
       setBusy(false);
     }
-  }, [mode, targets]);
+  }, [mode, targets, tracker]);
+
+  // Optional: a native bridge (e.g. an Android wrapper around the reader SDK)
+  // can dispatch `window.dispatchEvent(new CustomEvent('rfid:read',
+  // { detail: { epc: '<hex>', rssi: -52 } }))` to give the radar real signal
+  // strength instead of the read-rate estimate.
+  useEffect(() => {
+    if (!scanActive) return undefined;
+    const onRead = (e) => {
+      const { epc, rssi } = e.detail || {};
+      if (epc) processScan(String(epc), rssi == null ? null : Number(rssi));
+    };
+    window.addEventListener('rfid:read', onRead);
+    return () => window.removeEventListener('rfid:read', onRead);
+  }, [scanActive, processScan]);
 
   function flush(raw) {
     clearTimeout(idleTimer.current);
@@ -198,6 +219,8 @@ export default function Search() {
       return;
     }
     setError(null);
+    tracker.reset();
+    lastSeen.current.clear();
     setTargets(withTag);
     setFound([]);
     setIgnoredTags(new Set());
@@ -317,6 +340,10 @@ export default function Search() {
             {ignoredTags.size} other tag{ignoredTags.size === 1 ? '' : 's'} in range ignored
           </div>
         </div>
+      )}
+
+      {mode === 'find' && stage === 'tracking' && targets.length === 1 && (
+        <RadarFinder tracker={tracker} fileLabel={targets[0].fileId} />
       )}
 
       {(mode === 'all' || (mode === 'find' && stage === 'tracking')) && (

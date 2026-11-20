@@ -23,9 +23,15 @@ const DEFAULT_INTERVAL = 1000; // assumed beat until we've seen a few reads
 const KEEP_MS = 30000;
 const MIN_READS_TO_TRUST = 3; // fewer reads than this can't claim "very close"
 
-// Typical UHF handheld RSSI range: ~ -75 dBm (edge of range) .. -30 dBm (touching)
+// RSSI unit from the SEUIC SDK is not documented, so we handle it defensively:
+//  - negative numbers are treated as dBm: ~ -75 (edge of range) .. -30 (touching)
+//    (values below -150 are assumed to be dBm x10 and divided by 10)
+//  - positive numbers (e.g. raw 0..255) are scaled against the largest value
+//    seen during this search, so it is relative rather than absolute.
+// Once you have your real calibration numbers, tune these two constants.
 const RSSI_FAR = -75;
 const RSSI_NEAR = -30;
+const MIN_POSITIVE_SPAN = 15; // avoid exaggerating tiny RSSI jitter
 
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const clamp01 = (n) => clamp(n, 0, 1);
@@ -37,6 +43,7 @@ export function createProximityTracker() {
   let lastTarget = 0;
   let totalReads = 0;
   let burstStart = 0;
+  let seenMax = null; // largest positive-style RSSI seen this search
   let exponent = 1; // sensitivity curve: <1 pulls the dot in sooner, >1 makes it harder
 
   // The reader's usual gap between reads = a low percentile of recent gaps
@@ -52,6 +59,12 @@ export function createProximityTracker() {
     return clamp(gaps[Math.floor(gaps.length * 0.2)], 150, 2500);
   }
 
+  function scaleRssi(avg) {
+    if (avg <= 0) return clamp01((avg - RSSI_FAR) / (RSSI_NEAR - RSSI_FAR));
+    const span = Math.max(MIN_POSITIVE_SPAN, seenMax || 0);
+    return clamp01((avg - (seenMax - span)) / span);
+  }
+
   return {
     /** Lower exponent = more sensitive (dot reaches the centre sooner). */
     setSensitivity(e) { exponent = e; },
@@ -60,7 +73,10 @@ export function createProximityTracker() {
     record(rssi = null, now = Date.now()) {
       // A long silence starts a new "burst" (e.g. a fresh trigger press).
       if (!lastReadAt || now - lastReadAt > Math.max(3 * beatInterval(), 3000)) burstStart = now;
-      times.push({ t: now, rssi: Number.isFinite(rssi) ? rssi : null });
+      let r = Number.isFinite(rssi) ? rssi : null;
+      if (r !== null && r < -150) r /= 10; // dBm x10 -> dBm
+      if (r !== null && r > 0) seenMax = seenMax === null ? r : Math.max(seenMax, r);
+      times.push({ t: now, rssi: r });
       lastReadAt = now;
       totalReads += 1;
     },
@@ -87,9 +103,7 @@ export function createProximityTracker() {
 
         const rssis = inWin.filter((r) => r.rssi !== null).map((r) => r.rssi);
         hasRssi = rssis.length > 0;
-        const rssiStrength = hasRssi
-          ? clamp01(((rssis.reduce((a, b) => a + b, 0) / rssis.length) - RSSI_FAR) / (RSSI_NEAR - RSSI_FAR))
-          : 0;
+        const rssiStrength = hasRssi ? scaleRssi(rssis.reduce((a, b) => a + b, 0) / rssis.length) : 0;
         const fill = Math.pow(ratio, exponent);
         target = hasRssi ? 0.7 * rssiStrength + 0.3 * fill : fill;
         target = Math.max(target, FLOOR); // a fresh read always counts for something
@@ -123,6 +137,7 @@ export function createProximityTracker() {
       lastTarget = 0;
       totalReads = 0;
       burstStart = 0;
+      seenMax = null;
     },
   };
 }

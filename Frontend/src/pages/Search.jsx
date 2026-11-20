@@ -38,6 +38,12 @@ export default function Search() {
   const inputRef = useRef(null);
   const idleTimer = useRef(null);
   const lastSeen = useRef(new Map()); // tag -> timestamp of last lookup
+  // The Android app re-sends the SDK's whole (accumulating) tag list every
+  // ~100 ms. A tag only counts as a NEW read when its `count` changed.
+  const prevCounts = useRef(new Map()); // normalized epc -> last seen count
+  // Once the native bridge delivers reads we stop trusting keyboard-wedge text
+  // (otherwise every read would be counted twice).
+  const nativeSeen = useRef(false);
   // Collects every read of the file being hunted (before de-duplication) so the
   // radar can turn read-rate / RSSI into a distance feel.
   const tracker = useRef(createProximityTracker()).current;
@@ -138,15 +144,34 @@ export default function Search() {
     }
   }, [mode, targets, tracker]);
 
-  // Optional: a native bridge (e.g. an Android wrapper around the reader SDK)
-  // can dispatch `window.dispatchEvent(new CustomEvent('rfid:read',
-  // { detail: { epc: '<hex>', rssi: -52 } }))` to give the radar real signal
-  // strength instead of the read-rate estimate.
+  // Native bridge: the Android app dispatches
+  //   window.dispatchEvent(new CustomEvent('rfid:read', { detail:
+  //     { source, ts, tags: [{ epc, rssi, count }] } }))
+  // about every 100 ms while the trigger is held. A single { epc, rssi } is
+  // accepted too. The SDK list accumulates, so we only act on tags whose
+  // `count` changed since the previous poll.
   useEffect(() => {
     if (!scanActive) return undefined;
     const onRead = (e) => {
-      const { epc, rssi } = e.detail || {};
-      if (epc) processScan(String(epc), rssi == null ? null : Number(rssi));
+      const d = e.detail || {};
+      const items = Array.isArray(d.tags) ? d.tags : d.epc ? [d] : [];
+      if (items.length === 0) return;
+      nativeSeen.current = true;
+      for (const t of items) {
+        if (!t || !t.epc) continue;
+        const key = normalizeRfidTag(String(t.epc));
+        if (!key) continue;
+        const count = Number(t.count);
+        const prev = prevCounts.current.get(key);
+        if (Number.isFinite(count)) {
+          prevCounts.current.set(key, count);
+          // Same count as last poll = nothing new (tag may have left range).
+          // A LOWER count means the reader list was cleared: that is a new read.
+          if (prev !== undefined && count === prev) continue;
+        }
+        const rssi = t.rssi == null || t.rssi === '' ? null : Number(t.rssi);
+        processScan(String(t.epc), Number.isFinite(rssi) ? rssi : null);
+      }
     };
     window.addEventListener('rfid:read', onRead);
     return () => window.removeEventListener('rfid:read', onRead);
@@ -155,7 +180,8 @@ export default function Search() {
   function flush(raw) {
     clearTimeout(idleTimer.current);
     setValue('');
-    if (raw.trim()) processScan(raw);
+    // Manual entry always works; wedge text is ignored once the bridge is live.
+    if (raw.trim() && (manualMode || !nativeSeen.current)) processScan(raw);
   }
 
   function handleChange(e) {
@@ -191,6 +217,7 @@ export default function Search() {
     setScans([]);
     setError(null);
     lastSeen.current.clear();
+    prevCounts.current.clear();
     focusInput();
   }
 
@@ -210,6 +237,7 @@ export default function Search() {
     setStage('query');
     setError(null);
     lastSeen.current.clear();
+    prevCounts.current.clear();
   }
 
   function beginTracking(files) {
@@ -221,6 +249,7 @@ export default function Search() {
     setError(null);
     tracker.reset();
     lastSeen.current.clear();
+    prevCounts.current.clear();
     setTargets(withTag);
     setFound([]);
     setIgnoredTags(new Set());
@@ -234,7 +263,7 @@ export default function Search() {
     setSearching(true);
     setError(null);
     try {
-      const { items } = await fetchFiles({ search: q });
+      const { items } = await fetchFiles({ search: q, limit: 100 }); // backend default page size is 20
       if (items.length === 0) {
         setError(`No file matches “${q}”. Check the file ID, case number or name.`);
         return;

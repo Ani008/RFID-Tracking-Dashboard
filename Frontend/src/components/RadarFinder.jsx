@@ -18,7 +18,7 @@ const R_MIN = 16; // dot never covers the centre reader icon
  * dot's angle is cosmetic. Distance (and the beeps) are the real information.
  */
 export default function RadarFinder({ tracker, fileLabel }) {
-  const [state, setState] = useState({ strength: 0, active: false, rate: 0, hasRssi: false });
+  const [state, setState] = useState({ strength: 0, active: false, rate: 0, hasRssi: false, totalReads: 0, everSeen: false, seenAgo: null });
   const [muted, setMuted] = useState(false);
   const beeper = useRef(null);
 
@@ -39,7 +39,7 @@ export default function RadarFinder({ tracker, fileLabel }) {
 
   useEffect(() => { beeper.current?.setMuted(muted); }, [muted]);
 
-  const { strength, active, rate, hasRssi } = state;
+  const { strength, active, rate, hasRssi, totalReads, everSeen, seenAgo } = state;
   const dist = R_MIN + (1 - strength) * (R_MAX - R_MIN);
   const angle = (-50 * Math.PI) / 180;
   const dx = C + Math.cos(angle) * dist;
@@ -103,11 +103,11 @@ export default function RadarFinder({ tracker, fileLabel }) {
       </svg>
 
       <div className="radar-readout">
-        <div className="radar-label">{proximityLabel(strength, active)}</div>
+        <div className="radar-label">{proximityLabel(strength, active, everSeen)}</div>
         <div className="radar-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></div>
         <div className="radar-sub">
-          {active
-            ? `${pct}% signal · ${rate} read${rate === 1 ? '' : 's'}/s${hasRssi ? ' · RSSI on' : ''}`
+          {everSeen
+            ? `${pct}% signal · ${rate} reads/s · ${totalReads} read${totalReads === 1 ? '' : 's'} total · last ${seenAgo}s ago${hasRssi ? ' · RSSI on' : ''}`
             : 'Hold the trigger and move the reader around. Closer = faster beeps.'}
         </div>
       </div>

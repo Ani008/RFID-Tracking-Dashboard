@@ -26,11 +26,20 @@ export function createApp() {
   // Security HTTP Headers
   app.use(helmet());
 
-  // Strict CORS policy
-  const allowedOrigin = 'http://172.20.10.3:5173' || process.env.CLIENT_URL || 'http://localhost:5173';
+  // Flexible CORS policy for local network dev (supporting ports 5173, 5174, etc.)
+  const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173';
   app.use(
     cors({
-      origin: allowedOrigin,
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (
+          origin === allowedOrigin ||
+          /^http:\/\/(localhost|127\.0\.0\.1|172\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)
+        ) {
+          return callback(null, true);
+        }
+        return callback(new Error(`CORS blocked for origin: ${origin}`));
+      },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE'],
       allowedHeaders: ['Content-Type', 'Authorization'],

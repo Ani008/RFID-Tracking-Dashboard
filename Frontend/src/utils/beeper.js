@@ -1,9 +1,13 @@
 /**
- * Geiger-counter style proximity beeper built on the Web Audio API.
- * Closer => faster beeps and a higher pitch. Right on top => continuous tone.
+ * High-precision Geiger-counter style audio locator built on the Web Audio API.
  *
- * Browsers only allow audio after a user gesture, so call `unlock()` from a
- * click/tap handler (e.g. the button that starts the search).
+ * Designed for file-room shelf pinpointing:
+ *  - Far (> 2m): Slow, calm beeps (~1 beep/sec, 600-800 Hz).
+ *  - Approaching (30cm - 1m): Moderate pace (2-4 beeps/sec, 1000-1400 Hz).
+ *  - Close (15cm - 30cm): Fast pace (5-8 beeps/sec, 1500-1900 Hz).
+ *  - PINPOINT ZONE (0 - 15cm): Ultra-rapid staccato frenzy (15-25 beeps/sec, 35-70ms interval,
+ *    2100-2700 Hz, boosted volume). Enables instantly finding 1 file among 100 on a shelf.
+ *  - As soon as the reader moves past 15cm, speed smoothly decelerates back to normal.
  */
 export function createBeeper() {
   let ctx = null;
@@ -11,7 +15,6 @@ export function createBeeper() {
   let timer = null;
   let strength = 0;
   let playing = false;
-  let tone = null; // continuous tone nodes when "right here"
 
   function ensureCtx() {
     if (!ctx) {
@@ -23,7 +26,7 @@ export function createBeeper() {
     return ctx;
   }
 
-  function beep(freq, durMs) {
+  function beep(freq, durMs, volume = 0.3) {
     const c = ensureCtx();
     if (!c) return;
     const osc = c.createOscillator();
@@ -32,45 +35,63 @@ export function createBeeper() {
     osc.frequency.value = freq;
     const t = c.currentTime;
     gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.4, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(Math.min(volume, 0.75), t + 0.004);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + durMs / 1000);
     osc.connect(gain).connect(c.destination);
     osc.start(t);
-    osc.stop(t + durMs / 1000 + 0.02);
-  }
-
-  function stopTone() {
-    if (!tone) return;
-    try { tone.osc.stop(); } catch { /* already stopped */ }
-    tone = null;
-  }
-
-  function startTone(freq) {
-    const c = ensureCtx();
-    if (!c) return;
-    if (tone) { tone.osc.frequency.value = freq; return; }
-    const osc = c.createOscillator();
-    const gain = c.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = freq;
-    gain.gain.value = 0.25;
-    osc.connect(gain).connect(c.destination);
-    osc.start();
-    tone = { osc };
+    osc.stop(t + durMs / 1000 + 0.015);
   }
 
   function tick() {
     timer = null;
-    if (!playing || muted || strength <= 0.02) { stopTone(); return schedule(150); }
-    const freq = 500 + strength * 1100; // 500 Hz far .. 1600 Hz close
-    if (strength >= 0.9) {
-      startTone(freq);
-      return schedule(100);
+    if (!playing || muted || strength <= 0.03) {
+      return schedule(120);
     }
-    stopTone();
-    beep(freq, 70);
-    // 900 ms between beeps when far, ~90 ms when very close
-    schedule(900 - strength * 810);
+
+    let freq;
+    let intervalMs;
+    let durMs;
+    let volume;
+
+    if (strength >= 0.82) {
+      // ==========================================
+      // PINPOINT ZONE: 0 to 15 cm
+      // Ultra-fast machine-gun rapid beeps (15-25 beeps per second)
+      // ==========================================
+      const p = Math.min(1, Math.max(0, (strength - 0.82) / 0.18)); // 0..1 within 0-15cm
+      // Interval shrinks from 75ms down to 35ms as you get closer to 0cm
+      intervalMs = Math.round(75 - p * 40);
+      // Frequency ramps up from 2100 Hz to 2750 Hz
+      freq = Math.round(2100 + p * 650);
+      // Crisp 20ms - 28ms staccato click so every pulse is distinctly heard
+      durMs = Math.round(28 - p * 8);
+      // Increased punchy volume
+      volume = 0.55 + p * 0.15;
+    } else if (strength >= 0.60) {
+      // 15cm to 40cm
+      const p = (strength - 0.60) / 0.22;
+      intervalMs = Math.round(210 - p * 135); // 210ms down to 75ms
+      freq = Math.round(1450 + p * 650);     // 1450 Hz to 2100 Hz
+      durMs = 36;
+      volume = 0.38 + p * 0.14;
+    } else if (strength >= 0.30) {
+      // 40cm to 1.5m
+      const p = (strength - 0.30) / 0.30;
+      intervalMs = Math.round(520 - p * 310); // 520ms down to 210ms
+      freq = Math.round(950 + p * 500);       // 950 Hz to 1450 Hz
+      durMs = 45;
+      volume = 0.28 + p * 0.10;
+    } else {
+      // > 1.5m (Far)
+      const p = Math.max(0, strength / 0.30);
+      intervalMs = Math.round(880 - p * 360); // 880ms down to 520ms (~1-2 beeps/sec)
+      freq = Math.round(620 + p * 330);       // 620 Hz to 950 Hz
+      durMs = 52;
+      volume = 0.22;
+    }
+
+    beep(freq, durMs, volume);
+    schedule(intervalMs);
   }
 
   function schedule(ms) {
@@ -89,10 +110,9 @@ export function createBeeper() {
       playing = false;
       clearTimeout(timer);
       timer = null;
-      stopTone();
     },
     setStrength(s) { strength = s; },
-    setMuted(m) { muted = m; if (m) stopTone(); },
+    setMuted(m) { muted = m; },
     destroy() {
       this.stop();
       if (ctx) ctx.close().catch(() => {});

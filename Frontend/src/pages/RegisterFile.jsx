@@ -18,12 +18,48 @@ export default function RegisterFile() {
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
   const [uploadError, setUploadError] = useState(null);
+  const [handheldTag, setHandheldTag] = useState(null);
 
+  // Desktop USB scanner listener
   useEffect(() => {
     if (!lastTag) return;
     const cleanTag = normalizeRfidTag(lastTag.uid);
     setForm((f) => (f.rfidTag ? f : { ...f, rfidTag: cleanTag }));
   }, [lastTag]);
+
+  // Handheld reader trigger listener (Android native bridge)
+  useEffect(() => {
+    const onRead = (e) => {
+      const d = e.detail || {};
+      const items = Array.isArray(d.tags) ? d.tags : d.epc ? [d] : [];
+      const first = items.find((t) => t && t.epc);
+      if (!first) return;
+      const cleanTag = normalizeRfidTag(String(first.epc));
+      if (!cleanTag) return;
+      setForm((f) => ({ ...f, rfidTag: cleanTag }));
+      setHandheldTag(cleanTag);
+
+      // Play audio confirmation chime
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.setValueAtTime(880, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
+          gain.gain.setValueAtTime(0.18, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.18);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.18);
+        }
+      } catch (_) {}
+    };
+    window.addEventListener('rfid:read', onRead);
+    return () => window.removeEventListener('rfid:read', onRead);
+  }, []);
 
   function update(field, value) {
     const cleanValue = field === 'rfidTag' ? normalizeRfidTag(value) : value;
@@ -87,7 +123,12 @@ export default function RegisterFile() {
         </span>
         {lastTag && (
           <span className="status-badge tone-blue" style={{ marginLeft: '0.5rem' }}>
-            Last scan: {lastTag.uid}
+            Desktop scan: {lastTag.uid}
+          </span>
+        )}
+        {handheldTag && (
+          <span className="status-badge tone-purple" style={{ marginLeft: '0.5rem' }}>
+            Handheld tag: {handheldTag}
           </span>
         )}
       </div>

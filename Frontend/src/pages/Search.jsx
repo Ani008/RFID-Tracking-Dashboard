@@ -11,11 +11,30 @@ import './Search.css';
 
 // Wedge readers type a whole tag in a few ms. If no Enter suffix is configured
 // on the reader, we treat a short pause in typing as "end of scan".
-const IDLE_FLUSH_MS = 150;
-// Holding the trigger re-reads the same tag many times a second; ignore repeats
-// inside this window so we don't spam the API.
-const REPEAT_WINDOW_MS = 1500;
+const IDLE_FLUSH_MS = 100;
+// Ultra-fast repeat window: 150ms allows instant rapid tag identification
+const REPEAT_WINDOW_MS = 150;
 const MIN_TAG_LENGTH = 8;
+
+function playSuccessTone() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) {
+      const ctx = new AC();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(1400, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1800, ctx.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.13);
+    }
+  } catch (_) {}
+}
 
 /**
  * Turns whatever the reader typed into a list of raw tag strings.
@@ -44,9 +63,24 @@ export default function Search() {
   // Once the native bridge delivers reads we stop trusting keyboard-wedge text
   // (otherwise every read would be counted twice).
   const nativeSeen = useRef(false);
+  // In-memory tag cache for 0ms instantaneous identification without waiting for network
+  const tagCache = useRef(new Map());
   // Collects every read of the file being hunted (before de-duplication) so the
   // radar can turn read-rate / RSSI into a distance feel.
   const tracker = useRef(createProximityTracker()).current;
+
+  // Preload registered files into cache on mount for sub-millisecond lookups
+  useEffect(() => {
+    fetchFiles({ limit: 500 })
+      .then(({ items }) => {
+        if (Array.isArray(items)) {
+          for (const f of items) {
+            if (f.rfidTag) tagCache.current.set(normalizeRfidTag(f.rfidTag), f);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const [manualMode, setManualMode] = useState(false);
   const [value, setValue] = useState('');
@@ -69,14 +103,14 @@ export default function Search() {
 
   const focusInput = useCallback(() => inputRef.current?.focus(), []);
 
-  const processScan = useCallback(async (raw, rssi = null) => {
+  const processScan = useCallback(async (raw, rssi = null, heading = null) => {
     const now = Date.now();
     const tags = [];
     for (const piece of splitScan(raw)) {
       const tag = normalizeRfidTag(piece);
       if (tag.length < MIN_TAG_LENGTH) continue;
-      // Radar: count every read of the target, even the repeats we skip below.
-      if (mode === 'find' && targets.some((f) => f.rfidTag === tag)) tracker.record(rssi, now);
+      // Radar: count every read of the target with its live signal and heading
+      if (mode === 'find' && targets.some((f) => f.rfidTag === tag)) tracker.record(rssi, now, heading);
       const last = lastSeen.current.get(tag);
       if (last && now - last < REPEAT_WINDOW_MS) continue;
       lastSeen.current.set(tag, now);
@@ -94,6 +128,7 @@ export default function Search() {
       for (const tag of unique) {
         const file = byTag.get(tag);
         if (!file) { others.push(tag); continue; }
+        playSuccessTone();
         setFound((prev) => {
           const existing = prev.find((s) => s.tag === tag);
           return [
@@ -112,11 +147,49 @@ export default function Search() {
       return;
     }
 
+    // "Scan all" mode: check in-memory cache first for 0ms instantaneous identification!
+    const resolved = [];
+    const missing = [];
+    const scannedAt = new Date().toISOString();
+    for (const tag of unique) {
+      if (tagCache.current.has(tag)) {
+        resolved.push({ tag, found: true, file: tagCache.current.get(tag) });
+      } else {
+        missing.push(tag);
+      }
+    }
+
+    if (resolved.length > 0) {
+      playSuccessTone();
+      setScans((prev) => {
+        let next = prev;
+        for (const r of [...resolved].reverse()) {
+          const existing = next.find((s) => s.tag === r.tag);
+          next = [
+            {
+              tag: r.tag,
+              found: r.found,
+              file: r.file || null,
+              scannedAt,
+              count: (existing?.count || 0) + 1,
+            },
+            ...next.filter((s) => s.tag !== r.tag),
+          ];
+        }
+        return next.slice(0, 50);
+      });
+    }
+
+    if (missing.length === 0) return;
+
     setBusy(true);
     setError(null);
     try {
-      const { results } = await lookupTags(unique);
-      const scannedAt = new Date().toISOString();
+      const { results } = await lookupTags(missing);
+      for (const r of results) {
+        if (r.found && r.file) tagCache.current.set(r.tag, r.file);
+      }
+      playSuccessTone();
       setScans((prev) => {
         let next = prev;
         // Oldest-first so the last tag read ends up on top.
@@ -137,7 +210,7 @@ export default function Search() {
       });
     } catch (err) {
       // Allow an immediate retry of the same tag after a failure
-      unique.forEach((t) => lastSeen.current.delete(t));
+      missing.forEach((t) => lastSeen.current.delete(t));
       setError(err.message);
     } finally {
       setBusy(false);
@@ -146,14 +219,13 @@ export default function Search() {
 
   // Native bridge: the Android app dispatches
   //   window.dispatchEvent(new CustomEvent('rfid:read', { detail:
-  //     { source, ts, tags: [{ epc, rssi, count }] } }))
-  // about every 100 ms while the trigger is held. A single { epc, rssi } is
-  // accepted too. The SDK list accumulates, so we only act on tags whose
-  // `count` changed since the previous poll.
+  //     { source, ts, heading, power, tags: [{ epc, rssi, count, heading }] } }))
+  // about every 100 ms while the trigger is held.
   useEffect(() => {
     if (!scanActive) return undefined;
     const onRead = (e) => {
       const d = e.detail || {};
+      const batchHeading = Number.isFinite(Number(d.heading)) ? Number(d.heading) : null;
       const items = Array.isArray(d.tags) ? d.tags : d.epc ? [d] : [];
       if (items.length === 0) return;
       nativeSeen.current = true;
@@ -170,7 +242,8 @@ export default function Search() {
           if (prev !== undefined && count === prev) continue;
         }
         const rssi = t.rssi == null || t.rssi === '' ? null : Number(t.rssi);
-        processScan(String(t.epc), Number.isFinite(rssi) ? rssi : null);
+        const tagHeading = Number.isFinite(Number(t.heading)) ? Number(t.heading) : batchHeading;
+        processScan(String(t.epc), Number.isFinite(rssi) ? rssi : null, tagHeading);
       }
     };
     window.addEventListener('rfid:read', onRead);
@@ -372,7 +445,13 @@ export default function Search() {
       )}
 
       {mode === 'find' && stage === 'tracking' && targets.length === 1 && (
-        <RadarFinder tracker={tracker} fileLabel={targets[0].fileId} />
+        <RadarFinder
+          tracker={tracker}
+          fileLabel={targets[0].fileId}
+          onOpenFile={() => setSelectedFileId(targets[0].fileId)}
+          onStop={() => { setStage('query'); setError(null); }}
+          targetFile={targets[0]}
+        />
       )}
 
       {(mode === 'all' || (mode === 'find' && stage === 'tracking')) && (

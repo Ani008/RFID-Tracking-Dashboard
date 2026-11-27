@@ -869,3 +869,33 @@ export async function updateRackLocation(req, res, next) {
     next(err);
   }
 }
+
+
+//for android app to locate files without need of login 
+export async function locateFile(req, res) {
+  try {
+    // Optional shared key. Only enforced when DEVICE_KEY is set in the backend .env
+    const requiredKey = process.env.DEVICE_KEY;
+    if (requiredKey && req.get('x-device-key') !== requiredKey) {
+      return res.status(401).json({ message: 'Device not authorised' });
+    }
+
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.status(400).json({ message: 'q is required' });
+
+    const exact = new RegExp(`^${escapeRegex(q)}$`, 'i');
+    const tagForm = q.replace(/[^0-9a-fA-F]/g, '').toUpperCase(); // same cleanup as tag registration
+
+    const or = [{ fileId: exact }, { caseId: exact }];
+    if (tagForm) or.push({ rfidTag: tagForm });
+
+    const doc = await File.findOne({ $or: or })
+      .select('fileId fileName caseId rfidTag storageLocation')
+      .lean();
+
+    // Same shape the app already understands: { items: [...] }
+    return res.json({ items: doc ? [doc] : [] });
+  } catch (err) {
+    return res.status(500).json({ message: 'Lookup failed' });
+  }
+}

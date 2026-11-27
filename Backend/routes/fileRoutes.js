@@ -11,6 +11,7 @@ import {
   listPendingMappingFiles,
   updateRackLocation,
   lookupTags,
+  locateFile,
 } from '../controllers/fileController.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 
@@ -32,6 +33,8 @@ const upload = multer({
     cb(new Error('Only .xlsx, .xls, or .csv files are supported'));
   },
 });
+
+router.get('/locate', locateFile);
 
 router.use(requireAuth);
 

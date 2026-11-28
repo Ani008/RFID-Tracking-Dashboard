@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import { getSocketUrl } from '../utils/apiConfig.js';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
+const SOCKET_URL = getSocketUrl();
 
 /**
  * Opens one shared socket connection and listens for `scanner:tag`, emitted

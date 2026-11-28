@@ -30,10 +30,12 @@ export async function fetchDailyTagging(params = {}) {
   return data;
 }
 
+import { getApiBaseUrl } from '../utils/apiConfig.js';
+
 export async function downloadReportCsv(type, params = {}) {
   const token = localStorage.getItem('rfid_auth_token');
   const query = new URLSearchParams(params).toString();
-  const url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api'}/reports/${type}/export?${query}`;
+  const url = `${getApiBaseUrl()}/reports/${type}/export?${query}`;
 
   const response = await fetch(url, {
     method: 'GET',

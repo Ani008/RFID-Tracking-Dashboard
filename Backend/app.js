@@ -26,20 +26,30 @@ export function createApp() {
   // Security HTTP Headers
   app.use(helmet());
 
-  // Flexible CORS policy for local network dev (supporting ports 5173, 5174, etc.)
-  const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173';
+  // Dynamic CORS policy: supports localhost, local LAN IPs, and explicit CLIENT_URL
+  const corsOriginCheck = (origin, callback) => {
+    // Allow non-browser requests (mobile native apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+
+    const configured = process.env.CLIENT_URL;
+    if (configured && origin === configured) return callback(null, true);
+
+    // Allow localhost and 127.0.0.1 on any port (5173, 5174, etc.)
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    // Allow private local network IPs on any port (192.168.x.x, 172.16-31.x.x, 10.x.x.x)
+    if (/^https?:\/\/(192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  };
+
   app.use(
     cors({
-      origin: (origin, callback) => {
-        if (!origin) return callback(null, true);
-        if (
-          origin === allowedOrigin ||
-          /^http:\/\/(localhost|127\.0\.0\.1|172\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)
-        ) {
-          return callback(null, true);
-        }
-        return callback(new Error(`CORS blocked for origin: ${origin}`));
-      },
+      origin: corsOriginCheck,
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE'],
       allowedHeaders: ['Content-Type', 'Authorization'],

@@ -7,18 +7,15 @@ import { JWT_SECRET } from '../middleware/auth.js';
 let io = null;
 
 export function initSocket(httpServer) {
-  const allowedOrigin = process.env.CLIENT_URL || 'http://localhost:5173';
   io = new Server(httpServer, {
     cors: {
       origin: (origin, callback) => {
         if (!origin) return callback(null, true);
-        if (
-          origin === allowedOrigin ||
-          /^http:\/\/(localhost|127\.0\.0\.1|172\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)
-        ) {
-          return callback(null, true);
-        }
-        return callback(new Error(`CORS blocked for origin: ${origin}`));
+        const configured = process.env.CLIENT_URL;
+        if (configured && origin === configured) return callback(null, true);
+        if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
+        if (/^https?:\/\/(192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)) return callback(null, true);
+        return callback(null, true);
       },
       methods: ['GET', 'POST'],
       credentials: true,
